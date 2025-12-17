@@ -151,22 +151,6 @@ export default function LoginPage() {
             </button>
           </div>
 
-          {/* Login hints */}
-          <div className="mt-6 pt-6 border-t border-surface-800">
-            <p className="text-xs text-surface-500 text-center mb-3">
-              Demo Accounts
-            </p>
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="p-3 bg-surface-900/50 rounded-lg">
-                <p className="text-surface-400 font-medium mb-1">Owner</p>
-                <p className="text-surface-500">adminPerexPastil</p>
-              </div>
-              <div className="p-3 bg-surface-900/50 rounded-lg">
-                <p className="text-surface-400 font-medium mb-1">Cashier</p>
-                <p className="text-surface-500">admin</p>
-              </div>
-            </div>
-          </div>
         </form>
       </div>
     </div>
