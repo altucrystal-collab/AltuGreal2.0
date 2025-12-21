@@ -2,18 +2,45 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { supabase, getProductImageUrl } from '@/lib/supabase'
-import { Product, PaymentMethod, CustomerType, Setting } from '@/types/database'
+import { PaymentMethod, CustomerType } from '@/types/database'
 import { useNotifications } from '@/contexts/NotificationContext'
 import toast from 'react-hot-toast'
 
+interface FinishedProduct {
+  id: string
+  name: string
+  image_url: string | null
+  selling_price: number
+  created_at: string
+  updated_at: string
+}
+
+interface ProductIngredient {
+  id: string
+  product_id: string
+  item_id: string
+  qty: number
+}
+
+interface InventoryItem {
+  id: string
+  name: string
+  qty: number
+  cost: number
+  unit_type: 'weight' | 'quantity'
+}
+
 interface CartItem {
-  product: Product
+  product: FinishedProduct
   quantity: number
+  ingredients: ProductIngredient[]
 }
 
 export default function SalesPage() {
   const { addRecentSale } = useNotifications()
-  const [products, setProducts] = useState<Product[]>([])
+  const [products, setProducts] = useState<FinishedProduct[]>([])
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([])
+  const [productIngredients, setProductIngredients] = useState<Record<string, ProductIngredient[]>>({})
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
   const [customerTypes, setCustomerTypes] = useState<CustomerType[]>([])
   const [dineInEnabled, setDineInEnabled] = useState(false)
@@ -27,19 +54,35 @@ export default function SalesPage() {
   const [isCheckingOut, setIsCheckingOut] = useState(false)
 
   // Product selection modal state
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
+  const [selectedProduct, setSelectedProduct] = useState<FinishedProduct | null>(null)
   const [quantity, setQuantity] = useState<number>(1)
 
   const fetchData = useCallback(async () => {
     try {
-      const [productsRes, paymentRes, customerRes, settingsRes] = await Promise.all([
-        supabase.from('products').select('*').gt('qty', 0).order('name'),
+      const [productsRes, inventoryRes, ingredientsRes, paymentRes, customerRes, settingsRes] = await Promise.all([
+        supabase.from('finished_products').select('*').order('name'),
+        supabase.from('products').select('*').order('name'),
+        supabase.from('product_ingredients').select('*'),
         supabase.from('payment_methods').select('*').order('name'),
         supabase.from('customer_types').select('*').order('name'),
         supabase.from('settings').select('*').eq('key', 'dine_in_takeout_enabled'),
       ])
 
       if (productsRes.data) setProducts(productsRes.data)
+      if (inventoryRes.data) setInventoryItems(inventoryRes.data)
+      
+      // Group ingredients by product_id
+      if (ingredientsRes.data) {
+        const grouped = ingredientsRes.data.reduce((acc: Record<string, ProductIngredient[]>, ing: ProductIngredient) => {
+          if (!acc[ing.product_id]) {
+            acc[ing.product_id] = []
+          }
+          acc[ing.product_id].push(ing)
+          return acc
+        }, {})
+        setProductIngredients(grouped)
+      }
+      
       if (paymentRes.data) setPaymentMethods(paymentRes.data)
       if (customerRes.data) setCustomerTypes(customerRes.data)
       if (settingsRes.data && settingsRes.data[0]) {
@@ -57,15 +100,76 @@ export default function SalesPage() {
     fetchData()
   }, [fetchData])
 
-  const handleProductClick = (product: Product) => {
-    // Check if product is already in cart
+  // Check if a product can be sold (has enough ingredients in stock)
+  const canSellProduct = (productId: string, qty: number = 1): boolean => {
+    const ingredients = productIngredients[productId] || []
+    if (ingredients.length === 0) return false
+
+    for (const ing of ingredients) {
+      const item = inventoryItems.find(i => i.id === ing.item_id)
+      if (!item) return false
+      
+      // Calculate total required including what's already in cart
+      const cartQty = cart
+        .filter(c => c.product.id !== productId) // Exclude current product being checked
+        .reduce((total, cartItem) => {
+          const cartIngredients = productIngredients[cartItem.product.id] || []
+          const matchingIng = cartIngredients.find(ci => ci.item_id === ing.item_id)
+          return total + (matchingIng ? matchingIng.qty * cartItem.quantity : 0)
+        }, 0)
+      
+      const requiredQty = (ing.qty * qty) + cartQty
+      if (item.qty < requiredQty) return false
+    }
+    return true
+  }
+
+  // Get max quantity that can be sold for a product
+  const getMaxQuantity = (productId: string): number => {
+    const ingredients = productIngredients[productId] || []
+    if (ingredients.length === 0) return 0
+
+    let maxQty = Infinity
+    for (const ing of ingredients) {
+      const item = inventoryItems.find(i => i.id === ing.item_id)
+      if (!item || ing.qty === 0) {
+        maxQty = 0
+        break
+      }
+      
+      // Subtract what's already reserved in cart for other products
+      const cartReserved = cart
+        .filter(c => c.product.id !== productId)
+        .reduce((total, cartItem) => {
+          const cartIngredients = productIngredients[cartItem.product.id] || []
+          const matchingIng = cartIngredients.find(ci => ci.item_id === ing.item_id)
+          return total + (matchingIng ? matchingIng.qty * cartItem.quantity : 0)
+        }, 0)
+      
+      const availableStock = item.qty - cartReserved
+      const possibleQty = Math.floor(availableStock / ing.qty)
+      maxQty = Math.min(maxQty, possibleQty)
+    }
+    return maxQty === Infinity ? 0 : maxQty
+  }
+
+  // Calculate total cost of ingredients for a product
+  const calculateProductCost = (productId: string): number => {
+    const ingredients = productIngredients[productId] || []
+    return ingredients.reduce((total, ing) => {
+      const item = inventoryItems.find(i => i.id === ing.item_id)
+      return total + (item ? item.cost * ing.qty : 0)
+    }, 0)
+  }
+
+  const handleProductClick = (product: FinishedProduct) => {
     const existingItem = cart.find(item => item.product.id === product.id)
     if (existingItem) {
       setSelectedProduct(product)
       setQuantity(existingItem.quantity)
     } else {
       setSelectedProduct(product)
-      setQuantity(product.unit_type === 'weight' ? 0.5 : 1)
+      setQuantity(1)
     }
   }
 
@@ -80,8 +184,16 @@ export default function SalesPage() {
       toast.error('Please enter a valid quantity')
       return
     }
-    if (quantity > selectedProduct.qty) {
-      toast.error('Not enough stock available')
+    
+    const maxQty = getMaxQuantity(selectedProduct.id)
+    if (quantity > maxQty) {
+      toast.error('Not enough ingredients in stock')
+      return
+    }
+
+    const ingredients = productIngredients[selectedProduct.id] || []
+    if (ingredients.length === 0) {
+      toast.error('This product has no ingredients configured')
       return
     }
 
@@ -96,7 +208,7 @@ export default function SalesPage() {
       toast.success('Cart updated')
     } else {
       // Add new item to cart
-      setCart([...cart, { product: selectedProduct, quantity }])
+      setCart([...cart, { product: selectedProduct, quantity, ingredients }])
       toast.success('Added to cart')
     }
     
@@ -114,9 +226,9 @@ export default function SalesPage() {
       return
     }
     
-    const product = cart.find(item => item.product.id === productId)?.product
-    if (product && newQuantity > product.qty) {
-      toast.error('Not enough stock available')
+    const maxQty = getMaxQuantity(productId)
+    if (newQuantity > maxQty) {
+      toast.error('Not enough ingredients in stock')
       return
     }
 
@@ -152,10 +264,10 @@ export default function SalesPage() {
       return
     }
 
-    // Validate all items have sufficient stock
+    // Validate all items have sufficient ingredients
     for (const item of cart) {
-      if (item.quantity > item.product.qty) {
-        toast.error(`Not enough stock for ${item.product.name}`)
+      if (!canSellProduct(item.product.id, item.quantity)) {
+        toast.error(`Not enough ingredients for ${item.product.name}`)
         return
       }
     }
@@ -166,20 +278,33 @@ export default function SalesPage() {
       // Generate transaction ID for grouping all items in this purchase
       const transactionId = crypto.randomUUID()
 
+      // Calculate ingredient deductions
+      const ingredientDeductions: Record<string, number> = {}
+      for (const item of cart) {
+        const ingredients = productIngredients[item.product.id] || []
+        for (const ing of ingredients) {
+          const deduction = ing.qty * item.quantity
+          ingredientDeductions[ing.item_id] = (ingredientDeductions[ing.item_id] || 0) + deduction
+        }
+      }
+
       // Create sale records for all items in cart
-      const saleRecords = cart.map(item => ({
-        transaction_id: transactionId,
-        product_id: item.product.id,
-        product_name: item.product.name,
-        qty: item.quantity,
-        unit_type: item.product.unit_type,
-        cost: item.product.cost,
-        selling_price: item.product.selling_price,
-        total: item.quantity * item.product.selling_price,
-        payment_method: selectedPaymentMethod,
-        customer_type: selectedCustomerType,
-        dine_in_takeout: dineInEnabled ? selectedDineInTakeout : null,
-      }))
+      const saleRecords = cart.map(item => {
+        const cost = calculateProductCost(item.product.id)
+        return {
+          transaction_id: transactionId,
+          product_id: item.product.id,
+          product_name: item.product.name,
+          qty: item.quantity,
+          unit_type: 'quantity' as const, // Finished products are always sold by quantity
+          cost: cost,
+          selling_price: item.product.selling_price,
+          total: item.quantity * item.product.selling_price,
+          payment_method: selectedPaymentMethod,
+          customer_type: selectedCustomerType,
+          dine_in_takeout: dineInEnabled ? selectedDineInTakeout : null,
+        }
+      })
       
       const { data: saleData, error: saleError } = await (supabase as any)
         .from('sales')
@@ -188,16 +313,18 @@ export default function SalesPage() {
 
       if (saleError) throw saleError
 
-      // Update inventory for all products
-      const inventoryUpdates = cart.map(item => 
-        (supabase as any)
+      // Deduct ingredients from inventory
+      const inventoryUpdates = Object.entries(ingredientDeductions).map(([itemId, deduction]) => {
+        const item = inventoryItems.find(i => i.id === itemId)
+        if (!item) return null
+        return (supabase as any)
           .from('products')
-          .update({ qty: item.product.qty - item.quantity })
-          .eq('id', item.product.id)
-      )
+          .update({ qty: item.qty - deduction })
+          .eq('id', itemId)
+      }).filter(Boolean)
 
       const inventoryResults = await Promise.all(inventoryUpdates)
-      const inventoryErrors = inventoryResults.filter(r => r.error)
+      const inventoryErrors = inventoryResults.filter(r => r?.error)
       if (inventoryErrors.length > 0) {
         throw new Error('Failed to update some inventory items')
       }
@@ -211,7 +338,7 @@ export default function SalesPage() {
       toast.success(`Sale completed! Total: ₱${totalAmount.toFixed(2)}`)
       
       clearCart()
-      fetchData() // Refresh products
+      fetchData() // Refresh products and inventory
     } catch (error) {
       console.error('Error processing sale:', error)
       toast.error('Failed to process sale')
@@ -229,6 +356,12 @@ export default function SalesPage() {
   }
 
   const cartTotal = cart.reduce((sum, item) => sum + (item.quantity * item.product.selling_price), 0)
+
+  // Filter products that have ingredients configured
+  const availableProducts = products.filter(p => {
+    const ingredients = productIngredients[p.id] || []
+    return ingredients.length > 0
+  })
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -260,20 +393,20 @@ export default function SalesPage() {
                 <div className="flex-1">
                   <p className="text-white font-medium text-sm">{item.product.name}</p>
                   <p className="text-surface-400 text-xs">
-                    {item.quantity} {item.product.unit_type === 'weight' ? 'kg' : 'pcs'} × ₱{item.product.selling_price.toFixed(2)}
+                    {item.quantity} pcs × ₱{item.product.selling_price.toFixed(2)}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => updateCartQuantity(item.product.id, item.quantity - (item.product.unit_type === 'weight' ? 0.1 : 1))}
+                      onClick={() => updateCartQuantity(item.product.id, item.quantity - 1)}
                       className="w-6 h-6 rounded bg-surface-700 hover:bg-surface-600 text-white flex items-center justify-center text-xs"
                     >
                       −
                     </button>
                     <span className="text-white text-sm font-mono w-12 text-center">{item.quantity}</span>
                     <button
-                      onClick={() => updateCartQuantity(item.product.id, item.quantity + (item.product.unit_type === 'weight' ? 0.1 : 1))}
+                      onClick={() => updateCartQuantity(item.product.id, item.quantity + 1)}
                       className="w-6 h-6 rounded bg-surface-700 hover:bg-surface-600 text-white flex items-center justify-center text-xs"
                     >
                       +
@@ -407,47 +540,64 @@ export default function SalesPage() {
       )}
 
       {/* Products Grid */}
-      {products.length === 0 ? (
+      {availableProducts.length === 0 ? (
         <div className="card p-12 text-center">
           <svg className="w-12 h-12 text-surface-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
           </svg>
           <h3 className="text-lg font-medium text-white mb-2">No products available</h3>
-          <p className="text-surface-400 text-sm">Add products in the Inventory section first</p>
+          <p className="text-surface-400 text-sm">Create products in the Products section first</p>
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-          {products.map((product) => (
-            <button
-              key={product.id}
-              onClick={() => handleProductClick(product)}
-              className="card p-4 text-left hover:border-primary-500/50 transition-all group"
-            >
-              {/* Product Image */}
-              <div className="aspect-square bg-surface-800 rounded-lg mb-3 overflow-hidden">
-                {product.image_url ? (
-                  <img
-                    src={getProductImageUrl(product.image_url) || ''}
-                    alt={product.name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <svg className="w-8 h-8 text-surface-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                  </div>
-                )}
-              </div>
+          {availableProducts.map((product) => {
+            const maxQty = getMaxQuantity(product.id)
+            const isAvailable = maxQty > 0
+            
+            return (
+              <button
+                key={product.id}
+                onClick={() => isAvailable && handleProductClick(product)}
+                disabled={!isAvailable}
+                className={`card p-4 text-left transition-all group ${
+                  isAvailable 
+                    ? 'hover:border-primary-500/50' 
+                    : 'opacity-50 cursor-not-allowed'
+                }`}
+              >
+                {/* Product Image */}
+                <div className="aspect-square bg-surface-800 rounded-lg mb-3 overflow-hidden relative">
+                  {product.image_url ? (
+                    <img
+                      src={getProductImageUrl(product.image_url) || ''}
+                      alt={product.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <svg className="w-8 h-8 text-surface-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                  )}
+                  {!isAvailable && (
+                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+                      <span className="text-red-400 text-xs font-medium px-2 py-1 bg-red-500/20 rounded">
+                        Out of Stock
+                      </span>
+                    </div>
+                  )}
+                </div>
 
-              {/* Product Info */}
-              <h3 className="font-medium text-white truncate mb-1">{product.name}</h3>
-              <p className="text-primary-500 font-bold">₱{product.selling_price.toFixed(2)}</p>
-              <p className="text-xs text-surface-500 mt-1">
-                Stock: {product.qty} {product.unit_type === 'weight' ? 'kg' : 'pcs'}
-              </p>
-            </button>
-          ))}
+                {/* Product Info */}
+                <h3 className="font-medium text-white truncate mb-1">{product.name}</h3>
+                <p className="text-primary-500 font-bold">₱{product.selling_price.toFixed(2)}</p>
+                <p className="text-xs text-surface-500 mt-1">
+                  {isAvailable ? `Can make: ${maxQty}` : 'Insufficient ingredients'}
+                </p>
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -488,14 +638,32 @@ export default function SalesPage() {
               </button>
             </div>
 
+            {/* Ingredients Info */}
+            <div className="mb-4 p-3 bg-surface-800/50 rounded-lg">
+              <p className="text-surface-400 text-xs font-medium mb-2">Ingredients per unit:</p>
+              <div className="space-y-1">
+                {(productIngredients[selectedProduct.id] || []).map((ing) => {
+                  const item = inventoryItems.find(i => i.id === ing.item_id)
+                  return item ? (
+                    <div key={ing.id} className="flex justify-between text-xs">
+                      <span className="text-surface-300">{item.name}</span>
+                      <span className="text-surface-500">
+                        {ing.qty} {item.unit_type === 'weight' ? 'g' : 'pcs'}
+                      </span>
+                    </div>
+                  ) : null
+                })}
+              </div>
+            </div>
+
             {/* Quantity */}
             <div className="mb-5">
               <label className="block text-sm font-medium text-surface-300 mb-2">
-                Quantity ({selectedProduct.unit_type === 'weight' ? 'kg' : 'pcs'})
+                Quantity
               </label>
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => setQuantity((q) => Math.max(selectedProduct.unit_type === 'weight' ? 0.1 : 1, q - (selectedProduct.unit_type === 'weight' ? 0.1 : 1)))}
+                  onClick={() => setQuantity((q) => Math.max(1, q - 1))}
                   className="w-10 h-10 rounded-lg bg-surface-800 hover:bg-surface-700 text-white flex items-center justify-center"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -505,14 +673,14 @@ export default function SalesPage() {
                 <input
                   type="number"
                   value={quantity}
-                  onChange={(e) => setQuantity(Math.max(0, parseFloat(e.target.value) || 0))}
-                  step={selectedProduct.unit_type === 'weight' ? 0.1 : 1}
-                  min={selectedProduct.unit_type === 'weight' ? 0.1 : 1}
-                  max={selectedProduct.qty}
+                  onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                  step={1}
+                  min={1}
+                  max={getMaxQuantity(selectedProduct.id)}
                   className="flex-1 px-4 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white text-center font-mono text-lg"
                 />
                 <button
-                  onClick={() => setQuantity((q) => Math.min(selectedProduct.qty, q + (selectedProduct.unit_type === 'weight' ? 0.1 : 1)))}
+                  onClick={() => setQuantity((q) => Math.min(getMaxQuantity(selectedProduct.id), q + 1))}
                   className="w-10 h-10 rounded-lg bg-surface-800 hover:bg-surface-700 text-white flex items-center justify-center"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -521,7 +689,7 @@ export default function SalesPage() {
                 </button>
               </div>
               <p className="text-xs text-surface-500 mt-1">
-                Available: {selectedProduct.qty} {selectedProduct.unit_type === 'weight' ? 'kg' : 'pcs'}
+                Max available: {getMaxQuantity(selectedProduct.id)} (based on ingredients)
               </p>
             </div>
 
@@ -535,7 +703,7 @@ export default function SalesPage() {
               </div>
               <button
                 onClick={addToCart}
-                disabled={quantity <= 0 || quantity > selectedProduct.qty}
+                disabled={quantity <= 0 || quantity > getMaxQuantity(selectedProduct.id)}
                 className="w-full py-3 px-4 bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Add to Cart
@@ -547,5 +715,3 @@ export default function SalesPage() {
     </div>
   )
 }
-
-
