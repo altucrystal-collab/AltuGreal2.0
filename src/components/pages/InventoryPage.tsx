@@ -7,10 +7,10 @@ import imageCompression from 'browser-image-compression'
 import toast from 'react-hot-toast'
 
 export default function InventoryPage() {
-  const [products, setProducts] = useState<Product[]>([])
+  const [items, setItems] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
+  const [editingItem, setEditingItem] = useState<Product | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -20,12 +20,11 @@ export default function InventoryPage() {
     unit_type: 'quantity' as 'weight' | 'quantity',
     qty: 0,
     cost: 0,
-    selling_price: 0,
   })
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
 
-  const fetchProducts = useCallback(async () => {
+  const fetchItems = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('products')
@@ -33,18 +32,18 @@ export default function InventoryPage() {
         .order('name')
 
       if (error) throw error
-      setProducts(data || [])
+      setItems(data || [])
     } catch (error) {
-      console.error('Error fetching products:', error)
-      toast.error('Failed to load products')
+      console.error('Error fetching items:', error)
+      toast.error('Failed to load items')
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    fetchProducts()
-  }, [fetchProducts])
+    fetchItems()
+  }, [fetchItems])
 
   const resetForm = () => {
     setFormData({
@@ -52,7 +51,6 @@ export default function InventoryPage() {
       unit_type: 'quantity',
       qty: 0,
       cost: 0,
-      selling_price: 0,
     })
     setImageFile(null)
     setImagePreview(null)
@@ -60,27 +58,26 @@ export default function InventoryPage() {
 
   const openAddModal = () => {
     resetForm()
-    setEditingProduct(null)
+    setEditingItem(null)
     setShowAddModal(true)
   }
 
-  const openEditModal = (product: Product) => {
+  const openEditModal = (item: Product) => {
     setFormData({
-      name: product.name,
-      unit_type: product.unit_type,
-      qty: product.qty,
-      cost: product.cost,
-      selling_price: product.selling_price,
+      name: item.name,
+      unit_type: item.unit_type,
+      qty: item.qty,
+      cost: item.cost,
     })
-    setImagePreview(product.image_url ? getProductImageUrl(product.image_url) : null)
+    setImagePreview(item.image_url ? getProductImageUrl(item.image_url) : null)
     setImageFile(null)
-    setEditingProduct(product)
+    setEditingItem(item)
     setShowAddModal(true)
   }
 
   const closeModal = () => {
     setShowAddModal(false)
-    setEditingProduct(null)
+    setEditingItem(null)
     resetForm()
   }
 
@@ -142,90 +139,100 @@ export default function InventoryPage() {
     e.preventDefault()
 
     if (!formData.name.trim()) {
-      toast.error('Please enter a product name')
+      toast.error('Please enter an item name')
       return
     }
 
     setIsSubmitting(true)
 
     try {
-      let imagePath = editingProduct?.image_url || null
+      let imagePath = editingItem?.image_url || null
 
       // Upload new image if selected
       if (imageFile) {
         const uploadedPath = await uploadImage(imageFile)
         if (uploadedPath) {
           // Delete old image if exists
-          if (editingProduct?.image_url) {
+          if (editingItem?.image_url) {
             await (supabase as any).storage
               .from(PRODUCT_IMAGES_BUCKET)
-              .remove([editingProduct.image_url])
+              .remove([editingItem.image_url])
           }
           imagePath = uploadedPath
         }
       }
 
-      const productData: Record<string, any> = {
+      const itemData: Record<string, any> = {
         name: formData.name,
         unit_type: formData.unit_type,
         qty: formData.qty,
         cost: formData.cost,
-        selling_price: formData.selling_price,
+        selling_price: 0, // Keep for backwards compatibility but not used
         image_url: imagePath,
       }
 
-      if (editingProduct) {
-        // Update existing product
+      if (editingItem) {
+        // Update existing item
         const { error } = await (supabase as any)
           .from('products')
-          .update(productData)
-          .eq('id', editingProduct.id)
+          .update(itemData)
+          .eq('id', editingItem.id)
 
         if (error) throw error
-        toast.success('Product updated!')
+        toast.success('Item updated!')
       } else {
-        // Create new product
+        // Create new item
         const { error } = await (supabase as any)
           .from('products')
-          .insert(productData)
+          .insert(itemData)
 
         if (error) throw error
-        toast.success('Product added!')
+        toast.success('Item added!')
       }
 
       closeModal()
-      fetchProducts()
+      fetchItems()
     } catch (error) {
-      console.error('Error saving product:', error)
-      toast.error('Failed to save product')
+      console.error('Error saving item:', error)
+      toast.error('Failed to save item')
     } finally {
       setIsSubmitting(false)
     }
   }
 
-  const handleDelete = async (product: Product) => {
-    if (!confirm(`Delete "${product.name}"?`)) return
+  const handleDelete = async (item: Product) => {
+    if (!confirm(`Delete "${item.name}"?`)) return
 
     try {
       // Delete image if exists
-      if (product.image_url) {
+      if (item.image_url) {
         await (supabase as any).storage
           .from(PRODUCT_IMAGES_BUCKET)
-          .remove([product.image_url])
+          .remove([item.image_url])
       }
 
       const { error } = await (supabase as any)
         .from('products')
         .delete()
-        .eq('id', product.id)
+        .eq('id', item.id)
 
       if (error) throw error
-      toast.success('Product deleted')
-      fetchProducts()
+      toast.success('Item deleted')
+      fetchItems()
     } catch (error) {
-      console.error('Error deleting product:', error)
-      toast.error('Failed to delete product')
+      console.error('Error deleting item:', error)
+      toast.error('Failed to delete item')
     }
+  }
+
+  // Format quantity display - convert kg to grams for weight type
+  const formatStock = (item: Product) => {
+    if (item.unit_type === 'weight') {
+      // Store as kg but display as grams
+      const grams = item.qty * 1000
+      return `${grams.toFixed(0)} g`
+    }
+    return `${item.qty} pcs`
   }
 
   if (loading) {
@@ -241,7 +248,7 @@ export default function InventoryPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Inventory</h1>
-          <p className="text-surface-400 text-sm mt-1">Manage your products</p>
+          <p className="text-surface-400 text-sm mt-1">Manage your raw materials and ingredients</p>
         </div>
         <button
           onClick={openAddModal}
@@ -250,28 +257,28 @@ export default function InventoryPage() {
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          Add Product
+          Add Item
         </button>
       </div>
 
-      {products.length === 0 ? (
+      {items.length === 0 ? (
         <div className="card p-12 text-center">
           <svg className="w-12 h-12 text-surface-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
           </svg>
-          <h3 className="text-lg font-medium text-white mb-2">No products yet</h3>
-          <p className="text-surface-400 text-sm">Add your first product to get started</p>
+          <h3 className="text-lg font-medium text-white mb-2">No items yet</h3>
+          <p className="text-surface-400 text-sm">Add your first inventory item to get started</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {products.map((product) => (
-            <div key={product.id} className="card p-4">
-              {/* Product Image */}
+          {items.map((item) => (
+            <div key={item.id} className="card p-4">
+              {/* Item Image */}
               <div className="aspect-square bg-surface-800 rounded-lg mb-3 overflow-hidden">
-                {product.image_url ? (
+                {item.image_url ? (
                   <img
-                    src={getProductImageUrl(product.image_url) || ''}
-                    alt={product.name}
+                    src={getProductImageUrl(item.image_url) || ''}
+                    alt={item.name}
                     className="w-full h-full object-cover"
                   />
                 ) : (
@@ -283,35 +290,31 @@ export default function InventoryPage() {
                 )}
               </div>
 
-              {/* Product Info */}
-              <h3 className="font-semibold text-white mb-2">{product.name}</h3>
+              {/* Item Info */}
+              <h3 className="font-semibold text-white mb-2">{item.name}</h3>
               <div className="space-y-1 text-sm">
                 <div className="flex justify-between">
                   <span className="text-surface-400">Stock:</span>
-                  <span className="text-white font-mono">
-                    {product.qty} {product.unit_type === 'weight' ? 'kg' : 'pcs'}
-                  </span>
+                  <span className="text-white font-mono">{formatStock(item)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-surface-400">Cost:</span>
-                  <span className="text-white font-mono">₱{product.cost.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-surface-400">Price:</span>
-                  <span className="text-primary-500 font-bold font-mono">₱{product.selling_price.toFixed(2)}</span>
+                  <span className="text-primary-500 font-bold font-mono">
+                    ₱{item.cost.toFixed(2)}/{item.unit_type === 'weight' ? 'g' : 'pc'}
+                  </span>
                 </div>
               </div>
 
               {/* Actions */}
               <div className="flex gap-2 mt-4 pt-4 border-t border-surface-800">
                 <button
-                  onClick={() => openEditModal(product)}
+                  onClick={() => openEditModal(item)}
                   className="flex-1 px-3 py-2 text-sm text-surface-400 hover:text-white hover:bg-surface-800 rounded-lg transition-colors"
                 >
                   Edit
                 </button>
                 <button
-                  onClick={() => handleDelete(product)}
+                  onClick={() => handleDelete(item)}
                   className="flex-1 px-3 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
                 >
                   Delete
@@ -328,7 +331,7 @@ export default function InventoryPage() {
           <div className="card p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-bold text-white">
-                {editingProduct ? 'Edit Product' : 'Add Product'}
+                {editingItem ? 'Edit Item' : 'Add Item'}
               </h2>
               <button onClick={closeModal} className="text-surface-400 hover:text-white">
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -341,7 +344,7 @@ export default function InventoryPage() {
               {/* Image Upload */}
               <div>
                 <label className="block text-sm font-medium text-surface-300 mb-2">
-                  Product Image (optional)
+                  Item Image (optional)
                 </label>
                 <div
                   onClick={() => fileInputRef.current?.click()}
@@ -371,14 +374,14 @@ export default function InventoryPage() {
               {/* Name */}
               <div>
                 <label className="block text-sm font-medium text-surface-300 mb-2">
-                  Product Name
+                  Item Name
                 </label>
                 <input
                   type="text"
                   value={formData.name}
                   onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
                   className="w-full px-4 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white"
-                  placeholder="Enter product name"
+                  placeholder="Enter item name"
                   required
                 />
               </div>
@@ -409,21 +412,28 @@ export default function InventoryPage() {
                         : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
                     }`}
                   >
-                    Weight (kg)
+                    Weight (g)
                   </button>
                 </div>
               </div>
 
-              {/* Quantity */}
+              {/* Quantity/Stock */}
               <div>
                 <label className="block text-sm font-medium text-surface-300 mb-2">
-                  Stock ({formData.unit_type === 'weight' ? 'kg' : 'pcs'})
+                  Stock ({formData.unit_type === 'weight' ? 'grams' : 'pcs'})
                 </label>
                 <input
                   type="number"
-                  value={formData.qty}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, qty: parseFloat(e.target.value) || 0 }))}
-                  step={formData.unit_type === 'weight' ? 0.1 : 1}
+                  value={formData.unit_type === 'weight' ? formData.qty * 1000 : formData.qty}
+                  onChange={(e) => {
+                    const value = parseFloat(e.target.value) || 0
+                    // Convert grams to kg for storage if weight type
+                    setFormData((prev) => ({
+                      ...prev,
+                      qty: prev.unit_type === 'weight' ? value / 1000 : value
+                    }))
+                  }}
+                  step={formData.unit_type === 'weight' ? 1 : 1}
                   min={0}
                   className="w-full px-4 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white font-mono"
                 />
@@ -432,7 +442,7 @@ export default function InventoryPage() {
               {/* Cost */}
               <div>
                 <label className="block text-sm font-medium text-surface-300 mb-2">
-                  Cost (₱)
+                  Cost per {formData.unit_type === 'weight' ? 'gram' : 'piece'} (₱)
                 </label>
                 <input
                   type="number"
@@ -444,27 +454,12 @@ export default function InventoryPage() {
                 />
               </div>
 
-              {/* Selling Price */}
-              <div>
-                <label className="block text-sm font-medium text-surface-300 mb-2">
-                  Selling Price (₱)
-                </label>
-                <input
-                  type="number"
-                  value={formData.selling_price}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, selling_price: parseFloat(e.target.value) || 0 }))}
-                  step={0.01}
-                  min={0}
-                  className="w-full px-4 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white font-mono"
-                />
-              </div>
-
-              {/* Profit Preview */}
+              {/* Total Value Preview */}
               <div className="p-3 bg-surface-800/50 rounded-lg">
                 <div className="flex justify-between text-sm">
-                  <span className="text-surface-400">Profit per unit:</span>
-                  <span className={`font-mono font-bold ${formData.selling_price - formData.cost >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                    ₱{(formData.selling_price - formData.cost).toFixed(2)}
+                  <span className="text-surface-400">Total inventory value:</span>
+                  <span className="font-mono font-bold text-white">
+                    ₱{(formData.cost * (formData.unit_type === 'weight' ? formData.qty * 1000 : formData.qty)).toFixed(2)}
                   </span>
                 </div>
               </div>
@@ -475,7 +470,7 @@ export default function InventoryPage() {
                 disabled={isSubmitting}
                 className="w-full py-3 px-4 bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white font-semibold rounded-lg transition-all disabled:opacity-50"
               >
-                {isSubmitting ? 'Saving...' : editingProduct ? 'Update Product' : 'Add Product'}
+                {isSubmitting ? 'Saving...' : editingItem ? 'Update Item' : 'Add Item'}
               </button>
             </form>
           </div>
@@ -484,5 +479,3 @@ export default function InventoryPage() {
     </div>
   )
 }
-
-

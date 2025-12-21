@@ -28,3 +28,4 @@ SELECT 'Data cleared successfully!' as status;
 SELECT 'Products remaining: ' || COUNT(*) as products FROM products;
 SELECT 'Sales remaining: ' || COUNT(*) as sales FROM sales;
 
+

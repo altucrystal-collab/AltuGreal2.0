@@ -6,8 +6,12 @@ import { Sale, PaymentMethod, CustomerType } from '@/types/database'
 import { format, startOfDay, endOfDay } from 'date-fns'
 import toast from 'react-hot-toast'
 
+interface ExtendedSale extends Sale {
+  store_sale_datetime?: string
+}
+
 export default function ReportsPage() {
-  const [sales, setSales] = useState<Sale[]>([])
+  const [sales, setSales] = useState<ExtendedSale[]>([])
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
   const [customerTypes, setCustomerTypes] = useState<CustomerType[]>([])
   const [loading, setLoading] = useState(true)
@@ -21,6 +25,7 @@ export default function ReportsPage() {
       const dateStart = startOfDay(new Date(selectedDate))
       const dateEnd = endOfDay(new Date(selectedDate))
 
+      // Try to fetch with store_sale_datetime, fall back to created_at if column doesn't exist
       const { data, error } = await supabase
         .from('sales')
         .select('*')
@@ -30,7 +35,14 @@ export default function ReportsPage() {
         .order('created_at', { ascending: false })
 
       if (error) throw error
-      setSales(data || [])
+      
+      // Ensure store_sale_datetime exists (fallback to created_at if not)
+      const salesWithStoreDateTime = (data || []).map(sale => ({
+        ...sale,
+        store_sale_datetime: sale.store_sale_datetime || sale.created_at
+      }))
+      
+      setSales(salesWithStoreDateTime)
     } catch (error) {
       console.error('Error fetching sales:', error)
       toast.error('Failed to load sales')
@@ -80,14 +92,15 @@ export default function ReportsPage() {
       // Get selected sales data for CSV
       const salesToArchive = sales.filter((s) => selectedSales.has(s.id))
 
-      // Generate CSV
-      const csvHeaders = ['Item Name', 'Payment Method', 'Customer Type', 'Dine In/Takeout', 'Date & Time', 'Quantity', 'Total']
+      // Generate CSV with both datetime columns
+      const csvHeaders = ['Item Name', 'Payment Method', 'Customer Type', 'Dine In/Takeout', 'System DateTime', 'Store DateTime', 'Quantity', 'Total']
       const csvRows = salesToArchive.map((s) => [
         s.product_name,
         s.payment_method,
         s.customer_type,
         s.dine_in_takeout || 'N/A',
         format(new Date(s.created_at), 'yyyy-MM-dd HH:mm:ss'),
+        format(new Date(s.store_sale_datetime || s.created_at), 'yyyy-MM-dd HH:mm:ss'),
         s.qty,
         s.total.toFixed(2),
       ])
@@ -141,6 +154,26 @@ export default function ReportsPage() {
     }
   }
 
+  const handleUpdateStoreDateTime = async (saleId: string, newDateTime: string) => {
+    try {
+      const { error } = await (supabase as any)
+        .from('sales')
+        .update({ store_sale_datetime: new Date(newDateTime).toISOString() })
+        .eq('id', saleId)
+
+      if (error) throw error
+
+      setSales((prev) =>
+        prev.map((s) => (s.id === saleId ? { ...s, store_sale_datetime: new Date(newDateTime).toISOString() } : s))
+      )
+      toast.success('Store DateTime updated')
+      setEditingSale(null)
+    } catch (error) {
+      console.error('Error updating store datetime:', error)
+      toast.error('Failed to update. Make sure to run the database schema update.')
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -177,6 +210,14 @@ export default function ReportsPage() {
         </div>
       </div>
 
+      {/* Info about datetime columns */}
+      <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+        <p className="text-blue-400 text-sm">
+          💡 <strong>System DateTime</strong> is automatically recorded and cannot be changed. 
+          <strong> Store DateTime</strong> can be edited for earnings tracking purposes.
+        </p>
+      </div>
+
       {sales.length === 0 ? (
         <div className="card p-12 text-center">
           <svg className="w-12 h-12 text-surface-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -203,7 +244,13 @@ export default function ReportsPage() {
                   <th className="p-4 text-left text-sm font-medium text-surface-400">Payment</th>
                   <th className="p-4 text-left text-sm font-medium text-surface-400">Customer</th>
                   <th className="p-4 text-left text-sm font-medium text-surface-400">Type</th>
-                  <th className="p-4 text-left text-sm font-medium text-surface-400">Date & Time</th>
+                  <th className="p-4 text-left text-sm font-medium text-surface-400">
+                    <span className="text-surface-500">System DateTime</span>
+                  </th>
+                  <th className="p-4 text-left text-sm font-medium text-surface-400">
+                    <span className="text-primary-400">Store DateTime</span>
+                    <span className="text-xs text-surface-500 block">Click to edit</span>
+                  </th>
                   <th className="p-4 text-right text-sm font-medium text-surface-400">Qty</th>
                   <th className="p-4 text-right text-sm font-medium text-surface-400">Total</th>
                 </tr>
@@ -286,11 +333,32 @@ export default function ReportsPage() {
                         </button>
                       )}
                     </td>
-                    <td className="p-4 text-surface-400 text-sm">
+                    {/* System DateTime - Immutable */}
+                    <td className="p-4 text-surface-500 text-sm font-mono">
                       {format(new Date(sale.created_at), 'MMM d, yyyy h:mm a')}
                     </td>
+                    {/* Store DateTime - Editable */}
+                    <td className="p-4">
+                      {editingSale === `${sale.id}-storetime` ? (
+                        <input
+                          type="datetime-local"
+                          defaultValue={format(new Date(sale.store_sale_datetime || sale.created_at), "yyyy-MM-dd'T'HH:mm")}
+                          onChange={(e) => handleUpdateStoreDateTime(sale.id, e.target.value)}
+                          onBlur={() => setEditingSale(null)}
+                          autoFocus
+                          className="px-2 py-1 bg-surface-800 border border-surface-700 rounded text-white text-sm"
+                        />
+                      ) : (
+                        <button
+                          onClick={() => setEditingSale(`${sale.id}-storetime`)}
+                          className="text-primary-400 hover:text-primary-300 text-sm font-mono"
+                        >
+                          {format(new Date(sale.store_sale_datetime || sale.created_at), 'MMM d, yyyy h:mm a')}
+                        </button>
+                      )}
+                    </td>
                     <td className="p-4 text-right text-white font-mono">
-                      {sale.qty} {sale.unit_type === 'weight' ? 'kg' : 'pcs'}
+                      {sale.qty} {sale.unit_type === 'weight' ? 'g' : 'pcs'}
                     </td>
                     <td className="p-4 text-right text-primary-500 font-bold font-mono">
                       ₱{sale.total.toFixed(2)}
@@ -300,7 +368,7 @@ export default function ReportsPage() {
               </tbody>
               <tfoot>
                 <tr className="bg-surface-800/30">
-                  <td colSpan={7} className="p-4 text-right text-surface-400 font-medium">
+                  <td colSpan={8} className="p-4 text-right text-surface-400 font-medium">
                     Total Sales:
                   </td>
                   <td className="p-4 text-right text-primary-500 font-bold text-lg font-mono">
@@ -341,5 +409,3 @@ export default function ReportsPage() {
     </div>
   )
 }
-
-

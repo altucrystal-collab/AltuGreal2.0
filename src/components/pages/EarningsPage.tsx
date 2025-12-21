@@ -3,7 +3,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Sale } from '@/types/database'
-import { format, startOfDay, endOfDay, subDays, isToday, eachDayOfInterval, parseISO } from 'date-fns'
+import { format, startOfDay, endOfDay, subDays, eachDayOfInterval, parseISO } from 'date-fns'
+
+interface ExtendedSale extends Sale {
+  store_sale_datetime?: string
+}
 import {
   Chart as ChartJS,
   ArcElement,
@@ -32,7 +36,7 @@ ChartJS.register(
 )
 
 const CHART_COLORS = [
-  '#ed751c',
+  '#10b981',
   '#3b82f6',
   '#22c55e',
   '#f59e0b',
@@ -43,7 +47,7 @@ const CHART_COLORS = [
 ]
 
 export default function EarningsPage() {
-  const [sales, setSales] = useState<Sale[]>([])
+  const [sales, setSales] = useState<ExtendedSale[]>([])
   const [loading, setLoading] = useState(true)
   const [viewMode, setViewMode] = useState<'today' | 'range'>('today')
   const [startDate, setStartDate] = useState<string>(format(subDays(new Date(), 7), 'yyyy-MM-dd'))
@@ -51,27 +55,42 @@ export default function EarningsPage() {
 
   const fetchSales = useCallback(async () => {
     try {
-      let query = (supabase as any)
+      // Fetch all sales first, then filter by store_sale_datetime in JS
+      // This is because Supabase might not have the column yet
+      const { data, error } = await (supabase as any)
         .from('sales')
         .select('*')
         .eq('cancelled', false)
         .order('created_at', { ascending: true })
 
+      if (error) throw error
+
+      // Add store_sale_datetime fallback and filter by it
+      const salesWithStoreDateTime = (data || []).map((sale: any) => ({
+        ...sale,
+        store_sale_datetime: sale.store_sale_datetime || sale.created_at
+      }))
+
+      let filteredSales = salesWithStoreDateTime
+
       if (viewMode === 'today') {
-        // Show current date's LIVE data
         const today = new Date()
         const dateStart = startOfDay(today)
         const dateEnd = endOfDay(today)
-        query = query.gte('created_at', dateStart.toISOString()).lte('created_at', dateEnd.toISOString())
+        filteredSales = salesWithStoreDateTime.filter((s: ExtendedSale) => {
+          const saleDate = new Date(s.store_sale_datetime || s.created_at)
+          return saleDate >= dateStart && saleDate <= dateEnd
+        })
       } else {
         const dateStart = startOfDay(new Date(startDate))
         const dateEnd = endOfDay(new Date(endDate))
-        query = query.gte('created_at', dateStart.toISOString()).lte('created_at', dateEnd.toISOString())
+        filteredSales = salesWithStoreDateTime.filter((s: ExtendedSale) => {
+          const saleDate = new Date(s.store_sale_datetime || s.created_at)
+          return saleDate >= dateStart && saleDate <= dateEnd
+        })
       }
 
-      const { data, error } = await query
-      if (error) throw error
-      setSales(data || [])
+      setSales(filteredSales)
     } catch (error) {
       console.error('Error fetching sales:', error)
       toast.error('Failed to load earnings data')
@@ -118,7 +137,7 @@ export default function EarningsPage() {
     return acc
   }, {} as Record<string, number>)
 
-  // Line chart data for date range
+  // Line chart data for date range - uses store_sale_datetime for earnings tracking
   const getLineChartData = () => {
     if (viewMode !== 'range') return null
 
@@ -130,13 +149,13 @@ export default function EarningsPage() {
     const revenueByDay = days.map((day) => {
       const dayStr = format(day, 'yyyy-MM-dd')
       return sales
-        .filter((s) => format(new Date(s.created_at), 'yyyy-MM-dd') === dayStr)
+        .filter((s) => format(new Date(s.store_sale_datetime || s.created_at), 'yyyy-MM-dd') === dayStr)
         .reduce((sum, s) => sum + s.total, 0)
     })
 
     const profitByDay = days.map((day) => {
       const dayStr = format(day, 'yyyy-MM-dd')
-      const daySales = sales.filter((s) => format(new Date(s.created_at), 'yyyy-MM-dd') === dayStr)
+      const daySales = sales.filter((s) => format(new Date(s.store_sale_datetime || s.created_at), 'yyyy-MM-dd') === dayStr)
       const revenue = daySales.reduce((sum, s) => sum + s.total, 0)
       const cost = daySales.reduce((sum, s) => sum + (s.cost * s.qty), 0)
       return revenue - cost
@@ -148,8 +167,8 @@ export default function EarningsPage() {
         {
           label: 'Revenue',
           data: revenueByDay,
-          borderColor: '#ed751c',
-          backgroundColor: 'rgba(237, 117, 28, 0.1)',
+          borderColor: '#10b981',
+          backgroundColor: 'rgba(16, 185, 129, 0.1)',
           fill: true,
           tension: 0.4,
         },
@@ -279,7 +298,16 @@ export default function EarningsPage() {
       {viewMode === 'today' && (
         <div className="mb-6 p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
           <p className="text-green-400 text-sm">
-            📊 Showing today&apos;s live data. Auto-refreshes every 30 seconds.
+            📊 Showing today&apos;s live data based on <strong>Store Sale DateTime</strong>. Auto-refreshes every 30 seconds.
+          </p>
+        </div>
+      )}
+
+      {/* Range note */}
+      {viewMode === 'range' && (
+        <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+          <p className="text-blue-400 text-sm">
+            💡 Earnings are calculated based on <strong>Store Sale DateTime</strong> which can be edited in Reports.
           </p>
         </div>
       )}
