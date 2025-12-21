@@ -6,6 +6,11 @@ import { Product, PaymentMethod, CustomerType, Setting } from '@/types/database'
 import { useNotifications } from '@/contexts/NotificationContext'
 import toast from 'react-hot-toast'
 
+interface CartItem {
+  product: Product
+  quantity: number
+}
+
 export default function SalesPage() {
   const { addRecentSale } = useNotifications()
   const [products, setProducts] = useState<Product[]>([])
@@ -14,13 +19,16 @@ export default function SalesPage() {
   const [dineInEnabled, setDineInEnabled] = useState(false)
   const [loading, setLoading] = useState(true)
 
-  // Selected product state
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
+  // Cart state
+  const [cart, setCart] = useState<CartItem[]>([])
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('')
   const [selectedCustomerType, setSelectedCustomerType] = useState<string>('')
   const [selectedDineInTakeout, setSelectedDineInTakeout] = useState<'dine_in' | 'takeout' | null>(null)
-  const [quantity, setQuantity] = useState<number>(1)
   const [isCheckingOut, setIsCheckingOut] = useState(false)
+
+  // Product selection modal state
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
+  const [quantity, setQuantity] = useState<number>(1)
 
   const fetchData = useCallback(async () => {
     try {
@@ -50,23 +58,87 @@ export default function SalesPage() {
   }, [fetchData])
 
   const handleProductClick = (product: Product) => {
-    setSelectedProduct(product)
-    setQuantity(product.unit_type === 'weight' ? 0.5 : 1)
-    setSelectedPaymentMethod('')
-    setSelectedCustomerType('')
-    setSelectedDineInTakeout(dineInEnabled ? null : null)
+    // Check if product is already in cart
+    const existingItem = cart.find(item => item.product.id === product.id)
+    if (existingItem) {
+      setSelectedProduct(product)
+      setQuantity(existingItem.quantity)
+    } else {
+      setSelectedProduct(product)
+      setQuantity(product.unit_type === 'weight' ? 0.5 : 1)
+    }
   }
 
   const closeProductModal = () => {
     setSelectedProduct(null)
     setQuantity(1)
+  }
+
+  const addToCart = () => {
+    if (!selectedProduct) return
+    if (quantity <= 0) {
+      toast.error('Please enter a valid quantity')
+      return
+    }
+    if (quantity > selectedProduct.qty) {
+      toast.error('Not enough stock available')
+      return
+    }
+
+    // Check if product already exists in cart
+    const existingIndex = cart.findIndex(item => item.product.id === selectedProduct.id)
+    
+    if (existingIndex >= 0) {
+      // Update existing cart item
+      const updatedCart = [...cart]
+      updatedCart[existingIndex] = { ...updatedCart[existingIndex], quantity }
+      setCart(updatedCart)
+      toast.success('Cart updated')
+    } else {
+      // Add new item to cart
+      setCart([...cart, { product: selectedProduct, quantity }])
+      toast.success('Added to cart')
+    }
+    
+    closeProductModal()
+  }
+
+  const removeFromCart = (productId: string) => {
+    setCart(cart.filter(item => item.product.id !== productId))
+    toast.success('Removed from cart')
+  }
+
+  const updateCartQuantity = (productId: string, newQuantity: number) => {
+    if (newQuantity <= 0) {
+      removeFromCart(productId)
+      return
+    }
+    
+    const product = cart.find(item => item.product.id === productId)?.product
+    if (product && newQuantity > product.qty) {
+      toast.error('Not enough stock available')
+      return
+    }
+
+    setCart(cart.map(item => 
+      item.product.id === productId 
+        ? { ...item, quantity: newQuantity }
+        : item
+    ))
+  }
+
+  const clearCart = () => {
+    setCart([])
     setSelectedPaymentMethod('')
     setSelectedCustomerType('')
     setSelectedDineInTakeout(null)
   }
 
   const handleCheckout = async () => {
-    if (!selectedProduct) return
+    if (cart.length === 0) {
+      toast.error('Cart is empty')
+      return
+    }
     if (!selectedPaymentMethod) {
       toast.error('Please select a payment method')
       return
@@ -79,55 +151,66 @@ export default function SalesPage() {
       toast.error('Please select Dine In or Takeout')
       return
     }
-    if (quantity <= 0) {
-      toast.error('Please enter a valid quantity')
-      return
-    }
-    if (quantity > selectedProduct.qty) {
-      toast.error('Not enough stock available')
-      return
+
+    // Validate all items have sufficient stock
+    for (const item of cart) {
+      if (item.quantity > item.product.qty) {
+        toast.error(`Not enough stock for ${item.product.name}`)
+        return
+      }
     }
 
     setIsCheckingOut(true)
 
     try {
-      const total = quantity * selectedProduct.selling_price
+      // Generate transaction ID for grouping all items in this purchase
+      const transactionId = crypto.randomUUID()
 
-      // Create sale record
-      const saleRecord: Record<string, any> = {
-        product_id: selectedProduct.id,
-        product_name: selectedProduct.name,
-        qty: quantity,
-        unit_type: selectedProduct.unit_type,
-        cost: selectedProduct.cost,
-        selling_price: selectedProduct.selling_price,
-        total,
+      // Create sale records for all items in cart
+      const saleRecords = cart.map(item => ({
+        transaction_id: transactionId,
+        product_id: item.product.id,
+        product_name: item.product.name,
+        qty: item.quantity,
+        unit_type: item.product.unit_type,
+        cost: item.product.cost,
+        selling_price: item.product.selling_price,
+        total: item.quantity * item.product.selling_price,
         payment_method: selectedPaymentMethod,
         customer_type: selectedCustomerType,
         dine_in_takeout: dineInEnabled ? selectedDineInTakeout : null,
-      }
+      }))
       
       const { data: saleData, error: saleError } = await (supabase as any)
         .from('sales')
-        .insert(saleRecord)
+        .insert(saleRecords)
         .select()
-        .single()
 
       if (saleError) throw saleError
 
-      // Update inventory
-      const { error: inventoryError } = await (supabase as any)
-        .from('products')
-        .update({ qty: selectedProduct.qty - quantity })
-        .eq('id', selectedProduct.id)
+      // Update inventory for all products
+      const inventoryUpdates = cart.map(item => 
+        (supabase as any)
+          .from('products')
+          .update({ qty: item.product.qty - item.quantity })
+          .eq('id', item.product.id)
+      )
 
-      if (inventoryError) throw inventoryError
+      const inventoryResults = await Promise.all(inventoryUpdates)
+      const inventoryErrors = inventoryResults.filter(r => r.error)
+      if (inventoryErrors.length > 0) {
+        throw new Error('Failed to update some inventory items')
+      }
 
-      // Add to recent sales for notification
-      addRecentSale(saleData)
+      // Add first sale to recent sales for notification
+      if (saleData && saleData.length > 0) {
+        addRecentSale(saleData[0])
+      }
 
-      toast.success('Sale completed!')
-      closeProductModal()
+      const totalAmount = cart.reduce((sum, item) => sum + (item.quantity * item.product.selling_price), 0)
+      toast.success(`Sale completed! Total: ₱${totalAmount.toFixed(2)}`)
+      
+      clearCart()
       fetchData() // Refresh products
     } catch (error) {
       console.error('Error processing sale:', error)
@@ -145,12 +228,183 @@ export default function SalesPage() {
     )
   }
 
+  const cartTotal = cart.reduce((sum, item) => sum + (item.quantity * item.product.selling_price), 0)
+
   return (
     <div className="max-w-7xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-white">Sales</h1>
-        <p className="text-surface-400 text-sm mt-1">Select a product to start a sale</p>
+        <p className="text-surface-400 text-sm mt-1">Select products to add to cart</p>
       </div>
+
+      {/* Cart Summary - Fixed at top when cart has items */}
+      {cart.length > 0 && (
+        <div className="card p-4 mb-6 sticky top-4 z-40">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-white">Cart ({cart.length} {cart.length === 1 ? 'item' : 'items'})</h2>
+            <button
+              onClick={clearCart}
+              className="text-sm text-red-400 hover:text-red-300 flex items-center gap-1"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              Clear
+            </button>
+          </div>
+          
+          {/* Cart Items */}
+          <div className="space-y-2 mb-4 max-h-48 overflow-y-auto">
+            {cart.map((item) => (
+              <div key={item.product.id} className="flex items-center justify-between p-2 bg-surface-800 rounded-lg">
+                <div className="flex-1">
+                  <p className="text-white font-medium text-sm">{item.product.name}</p>
+                  <p className="text-surface-400 text-xs">
+                    {item.quantity} {item.product.unit_type === 'weight' ? 'kg' : 'pcs'} × ₱{item.product.selling_price.toFixed(2)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => updateCartQuantity(item.product.id, item.quantity - (item.product.unit_type === 'weight' ? 0.1 : 1))}
+                      className="w-6 h-6 rounded bg-surface-700 hover:bg-surface-600 text-white flex items-center justify-center text-xs"
+                    >
+                      −
+                    </button>
+                    <span className="text-white text-sm font-mono w-12 text-center">{item.quantity}</span>
+                    <button
+                      onClick={() => updateCartQuantity(item.product.id, item.quantity + (item.product.unit_type === 'weight' ? 0.1 : 1))}
+                      className="w-6 h-6 rounded bg-surface-700 hover:bg-surface-600 text-white flex items-center justify-center text-xs"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <span className="text-primary-500 font-bold text-sm w-20 text-right">
+                    ₱{(item.quantity * item.product.selling_price).toFixed(2)}
+                  </span>
+                  <button
+                    onClick={() => removeFromCart(item.product.id)}
+                    className="text-surface-500 hover:text-red-400 p-1"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Payment & Customer Selection */}
+          <div className="space-y-3 mb-4 pt-4 border-t border-surface-800">
+            {/* Customer Type */}
+            <div>
+              <label className="block text-xs font-medium text-surface-300 mb-2">Customer Type</label>
+              <div className="flex flex-wrap gap-2">
+                {customerTypes.length === 0 ? (
+                  <p className="text-surface-500 text-xs">No customer types configured</p>
+                ) : (
+                  customerTypes.map((ct) => (
+                    <button
+                      key={ct.id}
+                      onClick={() => setSelectedCustomerType(ct.name)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        selectedCustomerType === ct.name
+                          ? 'ring-2 ring-white ring-offset-2 ring-offset-[#141416]'
+                          : 'opacity-80 hover:opacity-100'
+                      }`}
+                      style={{ backgroundColor: ct.color, color: '#fff' }}
+                    >
+                      {ct.name}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Payment Method */}
+            <div>
+              <label className="block text-xs font-medium text-surface-300 mb-2">Payment Method</label>
+              <div className="flex flex-wrap gap-2">
+                {paymentMethods.length === 0 ? (
+                  <p className="text-surface-500 text-xs">No payment methods configured</p>
+                ) : (
+                  paymentMethods.map((pm) => (
+                    <button
+                      key={pm.id}
+                      onClick={() => setSelectedPaymentMethod(pm.name)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        selectedPaymentMethod === pm.name
+                          ? 'ring-2 ring-white ring-offset-2 ring-offset-[#141416]'
+                          : 'opacity-80 hover:opacity-100'
+                      }`}
+                      style={{ backgroundColor: pm.color, color: '#fff' }}
+                    >
+                      {pm.name}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Dine In / Takeout */}
+            {dineInEnabled && (
+              <div>
+                <label className="block text-xs font-medium text-surface-300 mb-2">Dine In / Takeout</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setSelectedDineInTakeout('dine_in')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                      selectedDineInTakeout === 'dine_in'
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
+                    }`}
+                  >
+                    🍽️ Dine In
+                  </button>
+                  <button
+                    onClick={() => setSelectedDineInTakeout('takeout')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                      selectedDineInTakeout === 'takeout'
+                        ? 'bg-green-500 text-white'
+                        : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
+                    }`}
+                  >
+                    🥡 Takeout
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Total & Checkout */}
+          <div className="pt-4 border-t border-surface-800">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-surface-400 font-medium">Total</span>
+              <span className="text-2xl font-bold text-primary-500">
+                ₱{cartTotal.toFixed(2)}
+              </span>
+            </div>
+            <button
+              onClick={handleCheckout}
+              disabled={isCheckingOut || !selectedPaymentMethod || !selectedCustomerType || (dineInEnabled && !selectedDineInTakeout)}
+              className="w-full py-3 px-4 bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isCheckingOut ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Processing...
+                </span>
+              ) : (
+                'Complete Purchase'
+              )}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Products Grid */}
       {products.length === 0 ? (
@@ -234,56 +488,6 @@ export default function SalesPage() {
               </button>
             </div>
 
-            {/* Customer Type */}
-            <div className="mb-5">
-              <label className="block text-sm font-medium text-surface-300 mb-2">Customer Type</label>
-              <div className="flex flex-wrap gap-2">
-                {customerTypes.length === 0 ? (
-                  <p className="text-surface-500 text-sm">No customer types configured. Add them in Settings.</p>
-                ) : (
-                  customerTypes.map((ct) => (
-                    <button
-                      key={ct.id}
-                      onClick={() => setSelectedCustomerType(ct.name)}
-                      className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                        selectedCustomerType === ct.name
-                          ? 'ring-2 ring-white ring-offset-2 ring-offset-[#141416]'
-                          : 'opacity-80 hover:opacity-100'
-                      }`}
-                      style={{ backgroundColor: ct.color, color: '#fff' }}
-                    >
-                      {ct.name}
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-
-            {/* Payment Method */}
-            <div className="mb-5">
-              <label className="block text-sm font-medium text-surface-300 mb-2">Payment Method</label>
-              <div className="flex flex-wrap gap-2">
-                {paymentMethods.length === 0 ? (
-                  <p className="text-surface-500 text-sm">No payment methods configured. Add them in Settings.</p>
-                ) : (
-                  paymentMethods.map((pm) => (
-                    <button
-                      key={pm.id}
-                      onClick={() => setSelectedPaymentMethod(pm.name)}
-                      className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                        selectedPaymentMethod === pm.name
-                          ? 'ring-2 ring-white ring-offset-2 ring-offset-[#141416]'
-                          : 'opacity-80 hover:opacity-100'
-                      }`}
-                      style={{ backgroundColor: pm.color, color: '#fff' }}
-                    >
-                      {pm.name}
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-
             {/* Quantity */}
             <div className="mb-5">
               <label className="block text-sm font-medium text-surface-300 mb-2">
@@ -321,59 +525,20 @@ export default function SalesPage() {
               </p>
             </div>
 
-            {/* Dine In / Takeout */}
-            {dineInEnabled && (
-              <div className="mb-5">
-                <label className="block text-sm font-medium text-surface-300 mb-2">Dine In / Takeout</label>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setSelectedDineInTakeout('dine_in')}
-                    className={`flex-1 px-4 py-3 rounded-lg font-medium transition-all ${
-                      selectedDineInTakeout === 'dine_in'
-                        ? 'bg-blue-500 text-white'
-                        : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
-                    }`}
-                  >
-                    🍽️ Dine In
-                  </button>
-                  <button
-                    onClick={() => setSelectedDineInTakeout('takeout')}
-                    className={`flex-1 px-4 py-3 rounded-lg font-medium transition-all ${
-                      selectedDineInTakeout === 'takeout'
-                        ? 'bg-green-500 text-white'
-                        : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
-                    }`}
-                  >
-                    🥡 Takeout
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Total & Checkout */}
+            {/* Add to Cart */}
             <div className="mt-6 pt-4 border-t border-surface-800">
               <div className="flex items-center justify-between mb-4">
-                <span className="text-surface-400">Total</span>
-                <span className="text-2xl font-bold text-primary-500">
+                <span className="text-surface-400">Subtotal</span>
+                <span className="text-xl font-bold text-primary-500">
                   ₱{(quantity * selectedProduct.selling_price).toFixed(2)}
                 </span>
               </div>
               <button
-                onClick={handleCheckout}
-                disabled={isCheckingOut || !selectedPaymentMethod || !selectedCustomerType || (dineInEnabled && !selectedDineInTakeout)}
+                onClick={addToCart}
+                disabled={quantity <= 0 || quantity > selectedProduct.qty}
                 className="w-full py-3 px-4 bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isCheckingOut ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    Processing...
-                  </span>
-                ) : (
-                  'Checkout'
-                )}
+                Add to Cart
               </button>
             </div>
           </div>

@@ -32,6 +32,8 @@ export interface Database {
           created_at: string
           cancelled: boolean
           cancelled_at: string | null
+          transaction_id: string | null
+          store_sale_datetime: string | null
         }
         Insert: Omit<Database['public']['Tables']['sales']['Row'], 'id' | 'created_at' | 'cancelled' | 'cancelled_at'>
         Update: Partial<Database['public']['Tables']['sales']['Insert'] & { cancelled: boolean; cancelled_at: string | null }>

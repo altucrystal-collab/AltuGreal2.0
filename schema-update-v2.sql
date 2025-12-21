@@ -63,7 +63,8 @@ CREATE TRIGGER update_finished_products_updated_at
 -- Enable RLS
 ALTER TABLE finished_products ENABLE ROW LEVEL SECURITY;
 
--- Create policy for public access
+-- Create policy for public access (drop if exists first)
+DROP POLICY IF EXISTS "Allow all operations on finished_products" ON finished_products;
 CREATE POLICY "Allow all operations on finished_products" ON finished_products
   FOR ALL USING (true) WITH CHECK (true);
 
@@ -83,7 +84,8 @@ CREATE TABLE IF NOT EXISTS product_ingredients (
 -- Enable RLS
 ALTER TABLE product_ingredients ENABLE ROW LEVEL SECURITY;
 
--- Create policy for public access
+-- Create policy for public access (drop if exists first)
+DROP POLICY IF EXISTS "Allow all operations on product_ingredients" ON product_ingredients;
 CREATE POLICY "Allow all operations on product_ingredients" ON product_ingredients
   FOR ALL USING (true) WITH CHECK (true);
 

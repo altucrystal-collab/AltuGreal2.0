@@ -336,7 +336,7 @@ export default function EarningsPage() {
               </svg>
             </div>
             <div>
-              <p className="text-surface-400 text-sm">Total Cost</p>
+              <p className="text-surface-400 text-sm">Total Expenses</p>
               <p className="text-2xl font-bold text-white font-mono">₱{totalCost.toFixed(2)}</p>
             </div>
           </div>
