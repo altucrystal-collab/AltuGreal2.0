@@ -100,6 +100,12 @@ export default function SalesPage() {
     fetchData()
   }, [fetchData])
 
+  // Get inventory stock in the same unit as ingredients (grams for weight, pieces for quantity)
+  const getInventoryInIngredientUnit = (item: InventoryItem): number => {
+    // Inventory stores weight items in kg, but ingredients are in grams
+    return item.unit_type === 'weight' ? item.qty * 1000 : item.qty
+  }
+
   // Check if a product can be sold (has enough ingredients in stock)
   const canSellProduct = (productId: string, qty: number = 1): boolean => {
     const ingredients = productIngredients[productId] || []
@@ -108,6 +114,9 @@ export default function SalesPage() {
     for (const ing of ingredients) {
       const item = inventoryItems.find(i => i.id === ing.item_id)
       if (!item) return false
+      
+      // Get inventory in same unit as ingredients
+      const inventoryStock = getInventoryInIngredientUnit(item)
       
       // Calculate total required including what's already in cart
       const cartQty = cart
@@ -119,7 +128,7 @@ export default function SalesPage() {
         }, 0)
       
       const requiredQty = (ing.qty * qty) + cartQty
-      if (item.qty < requiredQty) return false
+      if (inventoryStock < requiredQty) return false
     }
     return true
   }
@@ -137,6 +146,9 @@ export default function SalesPage() {
         break
       }
       
+      // Get inventory in same unit as ingredients
+      const inventoryStock = getInventoryInIngredientUnit(item)
+      
       // Subtract what's already reserved in cart for other products
       const cartReserved = cart
         .filter(c => c.product.id !== productId)
@@ -146,7 +158,7 @@ export default function SalesPage() {
           return total + (matchingIng ? matchingIng.qty * cartItem.quantity : 0)
         }, 0)
       
-      const availableStock = item.qty - cartReserved
+      const availableStock = inventoryStock - cartReserved
       const possibleQty = Math.floor(availableStock / ing.qty)
       maxQty = Math.min(maxQty, possibleQty)
     }
@@ -317,9 +329,11 @@ export default function SalesPage() {
       const inventoryUpdates = Object.entries(ingredientDeductions).map(([itemId, deduction]) => {
         const item = inventoryItems.find(i => i.id === itemId)
         if (!item) return null
+        // Convert deduction from grams to kg for weight items (ingredients are in grams, inventory is in kg)
+        const deductionInStorageUnit = item.unit_type === 'weight' ? deduction / 1000 : deduction
         return (supabase as any)
           .from('products')
-          .update({ qty: item.qty - deduction })
+          .update({ qty: item.qty - deductionInStorageUnit })
           .eq('id', itemId)
       }).filter(Boolean)
 
