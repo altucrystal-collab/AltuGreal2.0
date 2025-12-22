@@ -3,25 +3,49 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Sale, PaymentMethod, CustomerType } from '@/types/database'
-import { format, startOfDay, endOfDay } from 'date-fns'
+import { format, startOfDay, endOfDay, subDays } from 'date-fns'
 import toast from 'react-hot-toast'
 
+interface SaleWithEarnings extends Omit<Sale, 'earnings_datetime'> {
+  earnings_datetime: string | null
+}
+
+interface Transaction {
+  id: string
+  items: SaleWithEarnings[]
+  total: number
+  payment_method: string
+  customer_type: string
+  dine_in_takeout: 'dine_in' | 'takeout'
+  created_at: string
+  earnings_datetime: string
+  customer_payment: number | null
+}
+
 export default function ReportsPage() {
-  const [sales, setSales] = useState<Sale[]>([])
+  const [sales, setSales] = useState<SaleWithEarnings[]>([])
+  const [transactions, setTransactions] = useState<Transaction[]>([])
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
   const [customerTypes, setCustomerTypes] = useState<CustomerType[]>([])
   const [loading, setLoading] = useState(true)
-  const [selectedDate, setSelectedDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'))
-  const [selectedSales, setSelectedSales] = useState<Set<string>>(new Set())
+  
+  // Date range
+  const [startDate, setStartDate] = useState<string>(format(subDays(new Date(), 7), 'yyyy-MM-dd'))
+  const [endDate, setEndDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'))
+  
+  // Selection
+  const [selectedTransactions, setSelectedTransactions] = useState<Set<string>>(new Set())
   const [showArchiveModal, setShowArchiveModal] = useState(false)
-  const [editingSale, setEditingSale] = useState<string | null>(null)
+  
+  // Editing
+  const [editingField, setEditingField] = useState<string | null>(null)
 
   const fetchSales = useCallback(async () => {
+    setLoading(true)
     try {
-      const dateStart = startOfDay(new Date(selectedDate))
-      const dateEnd = endOfDay(new Date(selectedDate))
+      const dateStart = startOfDay(new Date(startDate))
+      const dateEnd = endOfDay(new Date(endDate))
 
-      // Try to fetch with store_sale_datetime, fall back to created_at if column doesn't exist
       const { data, error } = await supabase
         .from('sales')
         .select('*')
@@ -32,21 +56,49 @@ export default function ReportsPage() {
 
       if (error) throw error
       
-      // Ensure store_sale_datetime and transaction_id exist (fallback to created_at and id if not)
-      const salesWithStoreDateTime = (data || []).map(sale => ({
+      // Normalize field names for backward compatibility
+      const normalizedSales: SaleWithEarnings[] = (data || []).map((sale: any) => ({
         ...sale,
-        store_sale_datetime: sale.store_sale_datetime || sale.created_at,
-        transaction_id: sale.transaction_id || sale.id // Use id as transaction_id for backward compatibility
+        earnings_datetime: sale.earnings_datetime || sale.store_sale_datetime || sale.created_at,
+        transaction_id: sale.transaction_id || sale.id
       }))
       
-      setSales(salesWithStoreDateTime)
+      setSales(normalizedSales)
+
+      // Group into transactions
+      const grouped = normalizedSales.reduce((acc, sale) => {
+        const txId = sale.transaction_id || sale.id
+        if (!acc[txId]) {
+          acc[txId] = {
+            id: txId,
+            items: [],
+            total: 0,
+            payment_method: sale.payment_method,
+            customer_type: sale.customer_type,
+            dine_in_takeout: sale.dine_in_takeout,
+            created_at: sale.created_at,
+            earnings_datetime: sale.earnings_datetime || sale.created_at,
+            customer_payment: sale.customer_payment
+          }
+        }
+        acc[txId].items.push(sale)
+        acc[txId].total += sale.total
+        return acc
+      }, {} as Record<string, Transaction>)
+
+      // Sort by created_at descending
+      const sortedTransactions = Object.values(grouped).sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )
+
+      setTransactions(sortedTransactions)
     } catch (error) {
       console.error('Error fetching sales:', error)
       toast.error('Failed to load sales')
     } finally {
       setLoading(false)
     }
-  }, [selectedDate])
+  }, [startDate, endDate])
 
   const fetchOptions = useCallback(async () => {
     const [paymentRes, customerRes] = await Promise.all([
@@ -62,55 +114,82 @@ export default function ReportsPage() {
     fetchOptions()
   }, [fetchSales, fetchOptions])
 
-  const toggleSelectSale = (saleId: string) => {
-    setSelectedSales((prev) => {
+  const toggleSelectTransaction = (txId: string) => {
+    setSelectedTransactions((prev) => {
       const newSet = new Set(prev)
-      if (newSet.has(saleId)) {
-        newSet.delete(saleId)
+      if (newSet.has(txId)) {
+        newSet.delete(txId)
       } else {
-        newSet.add(saleId)
+        newSet.add(txId)
       }
       return newSet
     })
   }
 
   const toggleSelectAll = () => {
-    if (selectedSales.size === sales.length) {
-      setSelectedSales(new Set())
+    if (selectedTransactions.size === transactions.length) {
+      setSelectedTransactions(new Set())
     } else {
-      setSelectedSales(new Set(sales.map((s) => s.id)))
+      setSelectedTransactions(new Set(transactions.map((t) => t.id)))
     }
   }
 
   const handleArchive = async () => {
-    if (selectedSales.size === 0) return
+    if (selectedTransactions.size === 0) return
 
     try {
-      // Get selected sales data for CSV
-      const salesToArchive = sales.filter((s) => selectedSales.has(s.id))
+      // Get all sale IDs for selected transactions
+      const salesToArchive = sales.filter((s) => selectedTransactions.has(s.transaction_id || s.id))
 
-      // Generate CSV with transaction grouping
-      const csvHeaders = ['Transaction ID', 'Item Name', 'Payment Method', 'Customer Type', 'Dine In/Takeout', 'System DateTime', 'Store DateTime', 'Quantity', 'Total']
-      const csvRows = salesToArchive.map((s) => [
-        s.transaction_id || s.id,
-        s.product_name,
-        s.payment_method,
-        s.customer_type,
-        s.dine_in_takeout || 'N/A',
-        format(new Date(s.created_at), 'yyyy-MM-dd HH:mm:ss'),
-        format(new Date(s.store_sale_datetime || s.created_at), 'yyyy-MM-dd HH:mm:ss'),
-        s.qty,
-        s.total.toFixed(2),
-      ])
+      // Generate CSV
+      const csvHeaders = [
+        'Transaction #',
+        'Items',
+        'Payment Method',
+        'Customer Type',
+        'Order Type',
+        'System Date & Time',
+        'Earnings Date & Time',
+        'Customer Payment',
+        'Total'
+      ]
+      
+      // Group by transaction for CSV
+      const txGroups = salesToArchive.reduce((acc, sale) => {
+        const txId = sale.transaction_id || sale.id
+        if (!acc[txId]) {
+          acc[txId] = []
+        }
+        acc[txId].push(sale)
+        return acc
+      }, {} as Record<string, SaleWithEarnings[]>)
+
+      const csvRows = Object.entries(txGroups).map(([txId, items]) => {
+        const firstItem = items[0]
+        const itemsList = items.map(i => `${i.product_name} (${i.qty}pcs)`).join(', ')
+        const total = items.reduce((sum, i) => sum + i.total, 0)
+        
+        return [
+          txId,
+          `"${itemsList}"`,
+          firstItem.payment_method,
+          firstItem.customer_type,
+          firstItem.dine_in_takeout === 'dine_in' ? 'Dine In' : 'Takeout',
+          format(new Date(firstItem.created_at), 'yyyy-MM-dd HH:mm:ss'),
+          format(new Date(firstItem.earnings_datetime || firstItem.created_at), 'yyyy-MM-dd HH:mm:ss'),
+          firstItem.customer_payment?.toFixed(2) || '0.00',
+          total.toFixed(2),
+        ]
+      })
 
       const csvContent = [csvHeaders.join(','), ...csvRows.map((row) => row.join(','))].join('\n')
 
-      // Download CSV
+      // Download CSV with current date as filename
       const blob = new Blob([csvContent], { type: 'text/csv' })
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `sales-report-${selectedDate}.csv`
+      a.download = `sales-archive-${format(new Date(), 'yyyy-MM-dd')}.csv`
       a.click()
       window.URL.revokeObjectURL(url)
 
@@ -118,12 +197,12 @@ export default function ReportsPage() {
       const { error } = await supabase
         .from('sales')
         .delete()
-        .in('id', Array.from(selectedSales))
+        .in('id', salesToArchive.map(s => s.id))
 
       if (error) throw error
 
       toast.success('Reports archived and downloaded')
-      setSelectedSales(new Set())
+      setSelectedTransactions(new Set())
       setShowArchiveModal(false)
       fetchSales()
     } catch (error) {
@@ -132,65 +211,67 @@ export default function ReportsPage() {
     }
   }
 
-  const handleUpdateSale = async (saleId: string, field: string, value: string) => {
+  const handleUpdateTransaction = async (txId: string, field: string, value: string) => {
     try {
       const { error } = await (supabase as any)
         .from('sales')
         .update({ [field]: value })
-        .eq('id', saleId)
+        .eq('transaction_id', txId)
 
       if (error) throw error
 
-      setSales((prev) =>
-        prev.map((s) => (s.id === saleId ? { ...s, [field]: value } : s))
-      )
+      // Update local state
+      setSales(prev => prev.map(s => 
+        (s.transaction_id || s.id) === txId ? { ...s, [field]: value } : s
+      ))
+      
+      setTransactions(prev => prev.map(t => 
+        t.id === txId ? { ...t, [field]: value } : t
+      ))
+      
       toast.success('Updated successfully')
-      setEditingSale(null)
+      setEditingField(null)
     } catch (error) {
-      console.error('Error updating sale:', error)
+      console.error('Error updating:', error)
       toast.error('Failed to update')
     }
   }
 
-  const handleUpdateStoreDateTime = async (saleId: string, newDateTime: string) => {
+  const handleUpdateEarningsDateTime = async (txId: string, newDateTime: string) => {
     try {
-      // Update all sales in the same transaction
-      const sale = sales.find(s => s.id === saleId)
-      if (sale && sale.transaction_id) {
-        const transactionId = sale.transaction_id
-        const { error } = await (supabase as any)
+      const isoDateTime = new Date(newDateTime).toISOString()
+      
+      // Try new column name first, fall back to old
+      let result = await (supabase as any)
+        .from('sales')
+        .update({ earnings_datetime: isoDateTime })
+        .eq('transaction_id', txId)
+      
+      // If new column doesn't exist, try old column name
+      if (result.error && result.error.message.includes('earnings_datetime')) {
+        result = await (supabase as any)
           .from('sales')
-          .update({ store_sale_datetime: new Date(newDateTime).toISOString() })
-          .eq('transaction_id', transactionId)
-
-        if (error) throw error
-
-        setSales((prev) =>
-          prev.map((s) => 
-            s.transaction_id === transactionId 
-              ? { ...s, store_sale_datetime: new Date(newDateTime).toISOString() } 
-              : s
-          )
-        )
-        toast.success('Store DateTime updated for entire transaction')
-      } else {
-        // Fallback for single sale update
-        const { error } = await (supabase as any)
-          .from('sales')
-          .update({ store_sale_datetime: new Date(newDateTime).toISOString() })
-          .eq('id', saleId)
-
-        if (error) throw error
-
-        setSales((prev) =>
-          prev.map((s) => (s.id === saleId ? { ...s, store_sale_datetime: new Date(newDateTime).toISOString() } : s))
-        )
-        toast.success('Store DateTime updated')
+          .update({ store_sale_datetime: isoDateTime })
+          .eq('transaction_id', txId)
       }
-      setEditingSale(null)
+
+      if (result.error) throw result.error
+
+      setSales(prev => prev.map(s => 
+        (s.transaction_id || s.id) === txId 
+          ? { ...s, earnings_datetime: isoDateTime } 
+          : s
+      ))
+      
+      setTransactions(prev => prev.map(t => 
+        t.id === txId ? { ...t, earnings_datetime: isoDateTime } : t
+      ))
+      
+      toast.success('Earnings DateTime updated')
+      setEditingField(null)
     } catch (error) {
-      console.error('Error updating store datetime:', error)
-      toast.error('Failed to update. Make sure to run the database schema update.')
+      console.error('Error updating earnings datetime:', error)
+      toast.error('Failed to update')
     }
   }
 
@@ -202,21 +283,35 @@ export default function ReportsPage() {
     )
   }
 
+  const totalSales = transactions.reduce((sum, t) => sum + t.total, 0)
+
   return (
     <div className="max-w-7xl mx-auto">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Reports</h1>
           <p className="text-surface-400 text-sm mt-1">View and manage sales records</p>
         </div>
-        <div className="flex items-center gap-3">
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="px-4 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white"
-          />
-          {selectedSales.size > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Date Range */}
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white text-sm"
+            />
+            <span className="text-surface-500">to</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="px-3 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white text-sm"
+            />
+          </div>
+          
+          {selectedTransactions.size > 0 && (
             <button
               onClick={() => setShowArchiveModal(true)}
               className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
@@ -224,293 +319,211 @@ export default function ReportsPage() {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
               </svg>
-              Archive ({selectedSales.size})
+              Archive ({selectedTransactions.size})
             </button>
           )}
         </div>
       </div>
 
-      {/* Info about datetime columns */}
+      {/* Info */}
       <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
         <p className="text-blue-400 text-sm">
-          💡 <strong>System DateTime</strong> is automatically recorded and cannot be changed. 
-          <strong> Store DateTime</strong> can be edited for earnings tracking purposes. Sales are grouped by transaction.
+          💡 <strong>System Date & Time</strong> is immutable. 
+          <strong> Earnings Date & Time</strong> can be edited and is used for earnings calculations.
         </p>
       </div>
 
-      {(() => {
-        // Group sales by transaction_id
-        const groupedSales = sales.reduce((acc, sale) => {
-          const transactionId = sale.transaction_id || sale.id
-          if (!acc[transactionId]) {
-            acc[transactionId] = []
-          }
-          acc[transactionId].push(sale)
-          return acc
-        }, {} as Record<string, Sale[]>)
-
-        // Sort transactions by most recent
-        const sortedTransactions = Object.entries(groupedSales).sort((a, b) => {
-          const aTime = new Date(a[1][0].created_at).getTime()
-          const bTime = new Date(b[1][0].created_at).getTime()
-          return bTime - aTime
-        })
-
-        return sales.length === 0 ? (
+      {transactions.length === 0 ? (
         <div className="card p-12 text-center">
           <svg className="w-12 h-12 text-surface-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
-          <h3 className="text-lg font-medium text-white mb-2">No sales for this date</h3>
-          <p className="text-surface-400 text-sm">Try selecting a different date</p>
+          <h3 className="text-lg font-medium text-white mb-2">No sales in this date range</h3>
+          <p className="text-surface-400 text-sm">Try selecting a different date range</p>
         </div>
       ) : (
         <div className="space-y-4">
-          {sortedTransactions.map(([transactionId, transactionSales]) => {
-            const transactionTotal = transactionSales.reduce((sum, s) => sum + s.total, 0)
-            const firstSale = transactionSales[0]
-            const isMultiProduct = transactionSales.length > 1
-            
-            return (
-              <div key={transactionId} className="card overflow-hidden">
-                {/* Transaction Header */}
-                {isMultiProduct && (
-                  <div className="bg-surface-800/50 px-4 py-2 border-b border-surface-800">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-surface-400">Transaction:</span>
-                        <span className="text-xs text-primary-400 font-mono">{transactionId.substring(0, 8)}...</span>
-                        <span className="text-xs text-surface-500">({transactionSales.length} items)</span>
-                      </div>
-                      <span className="text-sm font-bold text-primary-500">
-                        Total: ₱{transactionTotal.toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-                
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-surface-800">
-                        <th className="p-4 text-left">
+          {/* Select All */}
+          <div className="flex items-center gap-2 px-2">
+            <input
+              type="checkbox"
+              checked={selectedTransactions.size === transactions.length && transactions.length > 0}
+              onChange={toggleSelectAll}
+              className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-primary-500 focus:ring-primary-500"
+            />
+            <span className="text-surface-400 text-sm">Select All ({transactions.length} transactions)</span>
+          </div>
+
+          {/* Transactions Table */}
+          <div className="card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-surface-800 bg-surface-800/50">
+                    <th className="p-4 text-left w-12"></th>
+                    <th className="p-4 text-left text-sm font-medium text-surface-400">Transaction #</th>
+                    <th className="p-4 text-left text-sm font-medium text-surface-400">Items</th>
+                    <th className="p-4 text-left text-sm font-medium text-surface-400">Payment</th>
+                    <th className="p-4 text-left text-sm font-medium text-surface-400">Customer</th>
+                    <th className="p-4 text-left text-sm font-medium text-surface-400">Order</th>
+                    <th className="p-4 text-left text-sm font-medium text-surface-400">
+                      <span className="text-surface-500">System Date</span>
+                    </th>
+                    <th className="p-4 text-left text-sm font-medium text-surface-400">
+                      <span className="text-primary-400">Earnings Date</span>
+                    </th>
+                    <th className="p-4 text-right text-sm font-medium text-surface-400">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transactions.map((tx, index) => (
+                    <tr key={tx.id} className="border-b border-surface-800/50 hover:bg-surface-800/30">
+                      <td className="p-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedTransactions.has(tx.id)}
+                          onChange={() => toggleSelectTransaction(tx.id)}
+                          className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-primary-500 focus:ring-primary-500"
+                        />
+                      </td>
+                      <td className="p-4">
+                        <span className="text-surface-300 font-mono text-xs">{tx.id.substring(0, 8)}</span>
+                      </td>
+                      <td className="p-4">
+                        <div className="max-w-xs">
+                          <span className="text-white text-sm">
+                            {tx.items.map(i => `${i.product_name} (${i.qty}pcs)`).join(', ')}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        {editingField === `${tx.id}-payment` ? (
+                          <select
+                            value={tx.payment_method}
+                            onChange={(e) => handleUpdateTransaction(tx.id, 'payment_method', e.target.value)}
+                            onBlur={() => setEditingField(null)}
+                            autoFocus
+                            className="px-2 py-1 bg-surface-800 border border-surface-700 rounded text-white text-sm"
+                          >
+                            {paymentMethods.map((pm) => (
+                              <option key={pm.id} value={pm.name}>{pm.name}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <button
+                            onClick={() => setEditingField(`${tx.id}-payment`)}
+                            className="text-surface-300 hover:text-white text-sm"
+                          >
+                            {tx.payment_method}
+                          </button>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        {editingField === `${tx.id}-customer` ? (
+                          <select
+                            value={tx.customer_type}
+                            onChange={(e) => handleUpdateTransaction(tx.id, 'customer_type', e.target.value)}
+                            onBlur={() => setEditingField(null)}
+                            autoFocus
+                            className="px-2 py-1 bg-surface-800 border border-surface-700 rounded text-white text-sm"
+                          >
+                            {customerTypes.map((ct) => (
+                              <option key={ct.id} value={ct.name}>{ct.name}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <button
+                            onClick={() => setEditingField(`${tx.id}-customer`)}
+                            className="text-surface-300 hover:text-white text-sm"
+                          >
+                            {tx.customer_type}
+                          </button>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        {editingField === `${tx.id}-order` ? (
+                          <select
+                            value={tx.dine_in_takeout}
+                            onChange={(e) => handleUpdateTransaction(tx.id, 'dine_in_takeout', e.target.value)}
+                            onBlur={() => setEditingField(null)}
+                            autoFocus
+                            className="px-2 py-1 bg-surface-800 border border-surface-700 rounded text-white text-sm"
+                          >
+                            <option value="dine_in">Dine In</option>
+                            <option value="takeout">Takeout</option>
+                          </select>
+                        ) : (
+                          <button
+                            onClick={() => setEditingField(`${tx.id}-order`)}
+                            className={`px-2 py-1 rounded text-xs font-medium ${
+                              tx.dine_in_takeout === 'dine_in' 
+                                ? 'bg-blue-500/20 text-blue-400' 
+                                : 'bg-green-500/20 text-green-400'
+                            }`}
+                          >
+                            {tx.dine_in_takeout === 'dine_in' ? 'Dine In' : 'Takeout'}
+                          </button>
+                        )}
+                      </td>
+                      <td className="p-4 text-surface-500 text-sm font-mono">
+                        {format(new Date(tx.created_at), 'MMM d, h:mm a')}
+                      </td>
+                      <td className="p-4">
+                        {editingField === `${tx.id}-earnings` ? (
                           <input
-                            type="checkbox"
-                            checked={transactionSales.every(s => selectedSales.has(s.id))}
-                            onChange={() => {
-                              const allSelected = transactionSales.every(s => selectedSales.has(s.id))
-                              if (allSelected) {
-                                transactionSales.forEach(s => {
-                                  const newSet = new Set(selectedSales)
-                                  newSet.delete(s.id)
-                                  setSelectedSales(newSet)
-                                })
-                              } else {
-                                transactionSales.forEach(s => {
-                                  const newSet = new Set(selectedSales)
-                                  newSet.add(s.id)
-                                  setSelectedSales(newSet)
-                                })
-                              }
-                            }}
-                            className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-primary-500 focus:ring-primary-500"
+                            type="datetime-local"
+                            defaultValue={format(new Date(tx.earnings_datetime), "yyyy-MM-dd'T'HH:mm")}
+                            onChange={(e) => handleUpdateEarningsDateTime(tx.id, e.target.value)}
+                            onBlur={() => setEditingField(null)}
+                            autoFocus
+                            className="px-2 py-1 bg-surface-800 border border-surface-700 rounded text-white text-sm"
                           />
-                        </th>
-                        <th className="p-4 text-left text-sm font-medium text-surface-400">Item Name</th>
-                        <th className="p-4 text-left text-sm font-medium text-surface-400">Payment</th>
-                        <th className="p-4 text-left text-sm font-medium text-surface-400">Customer</th>
-                        <th className="p-4 text-left text-sm font-medium text-surface-400">Type</th>
-                        <th className="p-4 text-left text-sm font-medium text-surface-400">
-                          <span className="text-surface-500">System DateTime</span>
-                        </th>
-                        <th className="p-4 text-left text-sm font-medium text-surface-400">
-                          <span className="text-primary-400">Store DateTime</span>
-                          <span className="text-xs text-surface-500 block">Click to edit</span>
-                        </th>
-                        <th className="p-4 text-right text-sm font-medium text-surface-400">Qty</th>
-                        <th className="p-4 text-right text-sm font-medium text-surface-400">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {transactionSales.map((sale, index) => (
-                        <tr key={sale.id} className={`border-b border-surface-800/50 hover:bg-surface-800/30 ${index === transactionSales.length - 1 ? '' : ''}`}>
-                          <td className="p-4">
-                            <input
-                              type="checkbox"
-                              checked={selectedSales.has(sale.id)}
-                              onChange={() => toggleSelectSale(sale.id)}
-                              className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-primary-500 focus:ring-primary-500"
-                            />
-                          </td>
-                          <td className="p-4 text-white font-medium">{sale.product_name}</td>
-                          <td className="p-4">
-                            {editingSale === `${sale.id}-payment` ? (
-                              <select
-                                value={sale.payment_method}
-                                onChange={(e) => {
-                                  handleUpdateSale(sale.id, 'payment_method', e.target.value)
-                                  // Update all sales in transaction
-                                  if (sale.transaction_id) {
-                                    transactionSales.forEach(s => {
-                                      if (s.id !== sale.id) {
-                                        handleUpdateSale(s.id, 'payment_method', e.target.value)
-                                      }
-                                    })
-                                  }
-                                }}
-                                onBlur={() => setEditingSale(null)}
-                                autoFocus
-                                className="px-2 py-1 bg-surface-800 border border-surface-700 rounded text-white text-sm"
-                              >
-                                {paymentMethods.map((pm) => (
-                                  <option key={pm.id} value={pm.name}>{pm.name}</option>
-                                ))}
-                              </select>
-                            ) : (
-                              <button
-                                onClick={() => setEditingSale(`${sale.id}-payment`)}
-                                className="text-surface-300 hover:text-white text-sm"
-                              >
-                                {sale.payment_method}
-                              </button>
-                            )}
-                          </td>
-                          <td className="p-4">
-                            {editingSale === `${sale.id}-customer` ? (
-                              <select
-                                value={sale.customer_type}
-                                onChange={(e) => {
-                                  handleUpdateSale(sale.id, 'customer_type', e.target.value)
-                                  // Update all sales in transaction
-                                  if (sale.transaction_id) {
-                                    transactionSales.forEach(s => {
-                                      if (s.id !== sale.id) {
-                                        handleUpdateSale(s.id, 'customer_type', e.target.value)
-                                      }
-                                    })
-                                  }
-                                }}
-                                onBlur={() => setEditingSale(null)}
-                                autoFocus
-                                className="px-2 py-1 bg-surface-800 border border-surface-700 rounded text-white text-sm"
-                              >
-                                {customerTypes.map((ct) => (
-                                  <option key={ct.id} value={ct.name}>{ct.name}</option>
-                                ))}
-                              </select>
-                            ) : (
-                              <button
-                                onClick={() => setEditingSale(`${sale.id}-customer`)}
-                                className="text-surface-300 hover:text-white text-sm"
-                              >
-                                {sale.customer_type}
-                              </button>
-                            )}
-                          </td>
-                          <td className="p-4">
-                            {editingSale === `${sale.id}-dinein` ? (
-                              <select
-                                value={sale.dine_in_takeout || ''}
-                                onChange={(e) => {
-                                  handleUpdateSale(sale.id, 'dine_in_takeout', e.target.value)
-                                  // Update all sales in transaction
-                                  if (sale.transaction_id) {
-                                    transactionSales.forEach(s => {
-                                      if (s.id !== sale.id) {
-                                        handleUpdateSale(s.id, 'dine_in_takeout', e.target.value)
-                                      }
-                                    })
-                                  }
-                                }}
-                                onBlur={() => setEditingSale(null)}
-                                autoFocus
-                                className="px-2 py-1 bg-surface-800 border border-surface-700 rounded text-white text-sm"
-                              >
-                                <option value="">N/A</option>
-                                <option value="dine_in">Dine In</option>
-                                <option value="takeout">Takeout</option>
-                              </select>
-                            ) : (
-                              <button
-                                onClick={() => setEditingSale(`${sale.id}-dinein`)}
-                                className="text-surface-300 hover:text-white text-sm"
-                              >
-                                {sale.dine_in_takeout === 'dine_in' ? '🍽️ Dine In' : sale.dine_in_takeout === 'takeout' ? '🥡 Takeout' : 'N/A'}
-                              </button>
-                            )}
-                          </td>
-                          {/* System DateTime - Immutable */}
-                          <td className="p-4 text-surface-500 text-sm font-mono">
-                            {format(new Date(sale.created_at), 'MMM d, yyyy h:mm a')}
-                          </td>
-                          {/* Store DateTime - Editable */}
-                          <td className="p-4">
-                            {editingSale === `${sale.id}-storetime` ? (
-                              <input
-                                type="datetime-local"
-                                defaultValue={format(new Date(sale.store_sale_datetime || sale.created_at), "yyyy-MM-dd'T'HH:mm")}
-                                onChange={(e) => handleUpdateStoreDateTime(sale.id, e.target.value)}
-                                onBlur={() => setEditingSale(null)}
-                                autoFocus
-                                className="px-2 py-1 bg-surface-800 border border-surface-700 rounded text-white text-sm"
-                              />
-                            ) : (
-                              <button
-                                onClick={() => setEditingSale(`${sale.id}-storetime`)}
-                                className="text-primary-400 hover:text-primary-300 text-sm font-mono"
-                              >
-                                {format(new Date(sale.store_sale_datetime || sale.created_at), 'MMM d, yyyy h:mm a')}
-                              </button>
-                            )}
-                          </td>
-                          <td className="p-4 text-right text-white font-mono">
-                            {sale.qty} {sale.unit_type === 'weight' ? 'g' : 'pcs'}
-                          </td>
-                          <td className="p-4 text-right text-primary-500 font-bold font-mono">
-                            ₱{sale.total.toFixed(2)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    {isMultiProduct && (
-                      <tfoot>
-                        <tr className="bg-surface-800/30">
-                          <td colSpan={8} className="p-4 text-right text-surface-400 font-medium">
-                            Transaction Total:
-                          </td>
-                          <td className="p-4 text-right text-primary-500 font-bold text-lg font-mono">
-                            ₱{transactionTotal.toFixed(2)}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    )}
-                  </table>
-                </div>
-              </div>
-            )
-          })}
-          
-          {/* Overall Total */}
+                        ) : (
+                          <button
+                            onClick={() => setEditingField(`${tx.id}-earnings`)}
+                            className="text-primary-400 hover:text-primary-300 text-sm font-mono"
+                          >
+                            {format(new Date(tx.earnings_datetime), 'MMM d, h:mm a')}
+                          </button>
+                        )}
+                      </td>
+                      <td className="p-4 text-right text-primary-500 font-bold font-mono">
+                        ₱{tx.total.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Total Summary */}
           <div className="card p-4 bg-primary-500/10 border border-primary-500/20">
             <div className="flex items-center justify-between">
-              <span className="text-surface-400 font-medium text-lg">Total Sales for Date:</span>
+              <span className="text-surface-400 font-medium text-lg">
+                Total Sales ({startDate === endDate ? format(new Date(startDate), 'MMM d, yyyy') : `${format(new Date(startDate), 'MMM d')} - ${format(new Date(endDate), 'MMM d, yyyy')}`})
+              </span>
               <span className="text-primary-500 font-bold text-xl font-mono">
-                ₱{sales.reduce((sum, s) => sum + s.total, 0).toFixed(2)}
+                ₱{totalSales.toFixed(2)}
               </span>
             </div>
           </div>
         </div>
-      )
-      })()}
+      )}
 
       {/* Archive Confirmation Modal */}
       {showArchiveModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="card p-6 max-w-md w-full">
             <h3 className="text-lg font-semibold text-white mb-2">Archive Selected Reports?</h3>
-            <p className="text-surface-400 text-sm mb-6">
-              This deletes the data from the database and will download a CSV file of the selected reports. Click to proceed.
+            <p className="text-surface-400 text-sm mb-4">
+              This will download a CSV file and <strong className="text-red-400">permanently delete</strong> the selected {selectedTransactions.size} transaction(s) from the database.
             </p>
+            <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg mb-4">
+              <p className="text-yellow-400 text-sm">
+                ⚠️ This action cannot be undone. Make sure to keep the downloaded CSV as your backup.
+              </p>
+            </div>
             <div className="flex gap-3">
               <button
                 onClick={() => setShowArchiveModal(false)}
@@ -522,7 +535,7 @@ export default function ReportsPage() {
                 onClick={handleArchive}
                 className="flex-1 px-4 py-2 bg-red-500 hover:bg-red-600 text-white font-medium rounded-lg transition-colors"
               >
-                Proceed
+                Download & Delete
               </button>
             </div>
           </div>

@@ -28,12 +28,13 @@ export interface Database {
           total: number
           payment_method: string
           customer_type: string
-          dine_in_takeout: 'dine_in' | 'takeout' | null
+          dine_in_takeout: 'dine_in' | 'takeout'
           created_at: string
           cancelled: boolean
           cancelled_at: string | null
           transaction_id: string | null
-          store_sale_datetime: string | null
+          earnings_datetime: string | null
+          customer_payment: number | null
         }
         Insert: Omit<Database['public']['Tables']['sales']['Row'], 'id' | 'created_at' | 'cancelled' | 'cancelled_at'>
         Update: Partial<Database['public']['Tables']['sales']['Insert'] & { cancelled: boolean; cancelled_at: string | null }>

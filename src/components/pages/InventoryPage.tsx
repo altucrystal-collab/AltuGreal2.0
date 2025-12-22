@@ -1,9 +1,8 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { supabase, getProductImageUrl, PRODUCT_IMAGES_BUCKET } from '@/lib/supabase'
+import { useState, useEffect, useCallback } from 'react'
+import { supabase, PRODUCT_IMAGES_BUCKET } from '@/lib/supabase'
 import { Product } from '@/types/database'
-import imageCompression from 'browser-image-compression'
 import toast from 'react-hot-toast'
 
 export default function InventoryPage() {
@@ -12,17 +11,14 @@ export default function InventoryPage() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingItem, setEditingItem] = useState<Product | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Form state
+  // Form state - totalCost is the total cost of entire quantity
   const [formData, setFormData] = useState({
     name: '',
     unit_type: 'quantity' as 'weight' | 'quantity',
-    qty: 0,
-    cost: 0,
+    qty: '',
+    totalCost: '', // Total cost for the entire stock
   })
-  const [imageFile, setImageFile] = useState<File | null>(null)
-  const [imagePreview, setImagePreview] = useState<string | null>(null)
 
   const fetchItems = useCallback(async () => {
     try {
@@ -49,11 +45,9 @@ export default function InventoryPage() {
     setFormData({
       name: '',
       unit_type: 'quantity',
-      qty: 0,
-      cost: 0,
+      qty: '',
+      totalCost: '',
     })
-    setImageFile(null)
-    setImagePreview(null)
   }
 
   const openAddModal = () => {
@@ -63,14 +57,16 @@ export default function InventoryPage() {
   }
 
   const openEditModal = (item: Product) => {
+    // Calculate total cost from stored per-unit cost
+    const stockInDisplayUnit = item.unit_type === 'weight' ? item.qty * 1000 : item.qty
+    const totalCost = item.cost * stockInDisplayUnit
+    
     setFormData({
       name: item.name,
       unit_type: item.unit_type,
-      qty: item.qty,
-      cost: item.cost,
+      qty: stockInDisplayUnit.toString(),
+      totalCost: totalCost.toFixed(2),
     })
-    setImagePreview(item.image_url ? getProductImageUrl(item.image_url) : null)
-    setImageFile(null)
     setEditingItem(item)
     setShowAddModal(true)
   }
@@ -81,58 +77,12 @@ export default function InventoryPage() {
     resetForm()
   }
 
-  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    try {
-      // Compress image to max 100x100px and 150KB
-      const options = {
-        maxSizeMB: 0.15, // 150KB
-        maxWidthOrHeight: 100,
-        useWebWorker: true,
-      }
-
-      const compressedFile = await imageCompression(file, options)
-      setImageFile(compressedFile)
-
-      // Create preview
-      const reader = new FileReader()
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string)
-      }
-      reader.readAsDataURL(compressedFile)
-    } catch (error) {
-      console.error('Error compressing image:', error)
-      toast.error('Failed to process image')
-    }
-  }
-
-  const uploadImage = async (file: File): Promise<string | null> => {
-    try {
-      const fileExt = file.name.split('.').pop()
-      const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`
-
-      const { error, data } = await (supabase as any).storage
-        .from(PRODUCT_IMAGES_BUCKET)
-        .upload(fileName, file, {
-          cacheControl: '3600',
-          upsert: false
-        })
-
-      if (error) {
-        console.error('Upload error:', error)
-        toast.error(`Upload failed: ${error.message}`)
-        return null
-      }
-      
-      console.log('Upload success:', data)
-      return fileName
-    } catch (error: any) {
-      console.error('Error uploading image:', error)
-      toast.error(`Upload error: ${error?.message || 'Unknown error'}`)
-      return null
-    }
+  // Calculate per-unit cost from total cost and quantity
+  const calculatePerUnitCost = (): number => {
+    const qty = parseFloat(formData.qty) || 0
+    const totalCost = parseFloat(formData.totalCost) || 0
+    if (qty <= 0) return 0
+    return totalCost / qty
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -143,36 +93,38 @@ export default function InventoryPage() {
       return
     }
 
+    const qty = parseFloat(formData.qty) || 0
+    if (qty <= 0) {
+      toast.error('Please enter a valid quantity')
+      return
+    }
+
     setIsSubmitting(true)
 
     try {
-      let imagePath = editingItem?.image_url || null
-
-      // Upload new image if selected
-      if (imageFile) {
-        const uploadedPath = await uploadImage(imageFile)
-        if (uploadedPath) {
-          // Delete old image if exists
-          if (editingItem?.image_url) {
-            await (supabase as any).storage
-              .from(PRODUCT_IMAGES_BUCKET)
-              .remove([editingItem.image_url])
-          }
-          imagePath = uploadedPath
-        }
-      }
+      // Calculate per-unit cost
+      const perUnitCost = calculatePerUnitCost()
+      
+      // For weight type, store qty in kg (divide grams by 1000)
+      const storageQty = formData.unit_type === 'weight' ? qty / 1000 : qty
 
       const itemData: Record<string, any> = {
         name: formData.name,
         unit_type: formData.unit_type,
-        qty: formData.qty,
-        cost: formData.cost,
-        selling_price: 0, // Keep for backwards compatibility but not used
-        image_url: imagePath,
+        qty: storageQty,
+        cost: perUnitCost, // Per-unit cost (per gram or per piece)
+        selling_price: 0, // Not used for inventory items
+        image_url: null, // No image for inventory
       }
 
       if (editingItem) {
-        // Update existing item
+        // Delete old image if exists
+        if (editingItem.image_url) {
+          await (supabase as any).storage
+            .from(PRODUCT_IMAGES_BUCKET)
+            .remove([editingItem.image_url])
+        }
+
         const { error } = await (supabase as any)
           .from('products')
           .update(itemData)
@@ -181,7 +133,6 @@ export default function InventoryPage() {
         if (error) throw error
         toast.success('Item updated!')
       } else {
-        // Create new item
         const { error } = await (supabase as any)
           .from('products')
           .insert(itemData)
@@ -225,14 +176,19 @@ export default function InventoryPage() {
     }
   }
 
-  // Format quantity display - convert kg to grams for weight type
+  // Format quantity display
   const formatStock = (item: Product) => {
     if (item.unit_type === 'weight') {
-      // Store as kg but display as grams
       const grams = item.qty * 1000
-      return `${grams.toFixed(0)} g`
+      return `${grams.toLocaleString()} g`
     }
-    return `${item.qty} pcs`
+    return `${item.qty.toLocaleString()} pcs`
+  }
+
+  // Calculate total value
+  const getTotalValue = (item: Product) => {
+    const stockInDisplayUnit = item.unit_type === 'weight' ? item.qty * 1000 : item.qty
+    return item.cost * stockInDisplayUnit
   }
 
   if (loading) {
@@ -242,6 +198,8 @@ export default function InventoryPage() {
       </div>
     )
   }
+
+  const perUnitCost = calculatePerUnitCost()
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -270,68 +228,74 @@ export default function InventoryPage() {
           <p className="text-surface-400 text-sm">Add your first inventory item to get started</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {items.map((item) => (
-            <div key={item.id} className="card p-4">
-              {/* Item Image */}
-              <div className="aspect-square bg-surface-800 rounded-lg mb-3 overflow-hidden">
-                {item.image_url ? (
-                  <img
-                    src={getProductImageUrl(item.image_url) || ''}
-                    alt={item.name}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <svg className="w-12 h-12 text-surface-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                  </div>
-                )}
-              </div>
-
-              {/* Item Info */}
-              <h3 className="font-semibold text-white mb-2">{item.name}</h3>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-surface-400">Stock:</span>
-                  <span className="text-white font-mono">{formatStock(item)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-surface-400">Cost:</span>
-                  <span className="text-primary-500 font-bold font-mono">
-                    ₱{item.cost.toFixed(2)}/{item.unit_type === 'weight' ? 'g' : 'pc'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex gap-2 mt-4 pt-4 border-t border-surface-800">
-                <button
-                  onClick={() => openEditModal(item)}
-                  className="flex-1 px-3 py-2 text-sm text-surface-400 hover:text-white hover:bg-surface-800 rounded-lg transition-colors"
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={() => handleDelete(item)}
-                  className="flex-1 px-3 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
+        <div className="card overflow-hidden">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-surface-800 bg-surface-800/50">
+                <th className="p-4 text-left text-sm font-medium text-surface-400">Item Name</th>
+                <th className="p-4 text-left text-sm font-medium text-surface-400">Unit Type</th>
+                <th className="p-4 text-right text-sm font-medium text-surface-400">Stock</th>
+                <th className="p-4 text-right text-sm font-medium text-surface-400">Cost/Unit</th>
+                <th className="p-4 text-right text-sm font-medium text-surface-400">Total Value</th>
+                <th className="p-4 text-center text-sm font-medium text-surface-400">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => (
+                <tr key={item.id} className="border-b border-surface-800/50 hover:bg-surface-800/30">
+                  <td className="p-4 text-white font-medium">{item.name}</td>
+                  <td className="p-4">
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                      item.unit_type === 'weight' 
+                        ? 'bg-blue-500/20 text-blue-400' 
+                        : 'bg-green-500/20 text-green-400'
+                    }`}>
+                      {item.unit_type === 'weight' ? 'Grams' : 'Pieces'}
+                    </span>
+                  </td>
+                  <td className="p-4 text-right text-white font-mono">{formatStock(item)}</td>
+                  <td className="p-4 text-right text-surface-300 font-mono">
+                    ₱{item.cost.toFixed(4)}/{item.unit_type === 'weight' ? 'g' : 'pc'}
+                  </td>
+                  <td className="p-4 text-right text-primary-500 font-bold font-mono">
+                    ₱{getTotalValue(item).toFixed(2)}
+                  </td>
+                  <td className="p-4">
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => openEditModal(item)}
+                        className="p-2 text-surface-400 hover:text-white hover:bg-surface-800 rounded-lg transition-colors"
+                        title="Edit"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => handleDelete(item)}
+                        className="p-2 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
+                        title="Delete"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
       {/* Add/Edit Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="card p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
+          <div className="card p-6 max-w-md w-full">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-bold text-white">
-                {editingItem ? 'Edit Item' : 'Add Item'}
+                {editingItem ? 'Edit Item' : 'Add New Item'}
               </h2>
               <button onClick={closeModal} className="text-surface-400 hover:text-white">
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -341,36 +305,6 @@ export default function InventoryPage() {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              {/* Image Upload */}
-              <div>
-                <label className="block text-sm font-medium text-surface-300 mb-2">
-                  Item Image (optional)
-                </label>
-                <div
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-full aspect-video bg-surface-800 border-2 border-dashed border-surface-700 rounded-lg flex items-center justify-center cursor-pointer hover:border-primary-500/50 transition-colors overflow-hidden"
-                >
-                  {imagePreview ? (
-                    <img src={imagePreview} alt="Preview" className="w-full h-full object-contain" />
-                  ) : (
-                    <div className="text-center p-4">
-                      <svg className="w-8 h-8 text-surface-500 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      <p className="text-surface-500 text-sm">Click to upload</p>
-                      <p className="text-surface-600 text-xs">Max 100x100px, 150KB</p>
-                    </div>
-                  )}
-                </div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageChange}
-                  className="hidden"
-                />
-              </div>
-
               {/* Name */}
               <div>
                 <label className="block text-sm font-medium text-surface-300 mb-2">
@@ -381,7 +315,7 @@ export default function InventoryPage() {
                   value={formData.name}
                   onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
                   className="w-full px-4 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white"
-                  placeholder="Enter item name"
+                  placeholder="e.g., Rice, Sugar, Eggs"
                   required
                 />
               </div>
@@ -401,7 +335,7 @@ export default function InventoryPage() {
                         : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
                     }`}
                   >
-                    Quantity (pcs)
+                    Pieces (pcs)
                   </button>
                   <button
                     type="button"
@@ -412,56 +346,69 @@ export default function InventoryPage() {
                         : 'bg-surface-800 text-surface-400 hover:bg-surface-700'
                     }`}
                   >
-                    Weight (g)
+                    Grams (g)
                   </button>
                 </div>
               </div>
 
-              {/* Quantity/Stock */}
+              {/* Stock Amount */}
               <div>
                 <label className="block text-sm font-medium text-surface-300 mb-2">
-                  Stock ({formData.unit_type === 'weight' ? 'grams' : 'pcs'})
+                  Stock Amount ({formData.unit_type === 'weight' ? 'grams' : 'pieces'})
                 </label>
                 <input
-                  type="number"
-                  value={formData.unit_type === 'weight' ? formData.qty * 1000 : formData.qty}
+                  type="text"
+                  inputMode="decimal"
+                  value={formData.qty}
                   onChange={(e) => {
-                    const value = parseFloat(e.target.value) || 0
-                    // Convert grams to kg for storage if weight type
-                    setFormData((prev) => ({
-                      ...prev,
-                      qty: prev.unit_type === 'weight' ? value / 1000 : value
-                    }))
+                    const val = e.target.value
+                    if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                      setFormData((prev) => ({ ...prev, qty: val }))
+                    }
                   }}
-                  step={formData.unit_type === 'weight' ? 1 : 1}
-                  min={0}
                   className="w-full px-4 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white font-mono"
+                  placeholder={formData.unit_type === 'weight' ? 'e.g., 100000 (for 100kg)' : 'e.g., 50'}
+                  required
                 />
               </div>
 
-              {/* Cost */}
+              {/* Total Cost */}
               <div>
                 <label className="block text-sm font-medium text-surface-300 mb-2">
-                  Cost per {formData.unit_type === 'weight' ? 'gram' : 'piece'} (₱)
+                  Total Cost (₱) <span className="text-surface-500 text-xs">for the entire quantity</span>
                 </label>
-                <input
-                  type="number"
-                  value={formData.cost}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, cost: parseFloat(e.target.value) || 0 }))}
-                  step={0.01}
-                  min={0}
-                  className="w-full px-4 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white font-mono"
-                />
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-surface-500">₱</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={formData.totalCost}
+                    onChange={(e) => {
+                      const val = e.target.value
+                      if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                        setFormData((prev) => ({ ...prev, totalCost: val }))
+                      }
+                    }}
+                    className="w-full pl-8 pr-4 py-2 bg-surface-800 border border-surface-700 rounded-lg text-white font-mono"
+                    placeholder="e.g., 5000"
+                    required
+                  />
+                </div>
               </div>
 
-              {/* Total Value Preview */}
-              <div className="p-3 bg-surface-800/50 rounded-lg">
-                <div className="flex justify-between text-sm">
-                  <span className="text-surface-400">Total inventory value:</span>
-                  <span className="font-mono font-bold text-white">
-                    ₱{(formData.cost * (formData.unit_type === 'weight' ? formData.qty * 1000 : formData.qty)).toFixed(2)}
+              {/* Per Unit Cost Preview */}
+              <div className="p-4 bg-surface-800/50 rounded-lg border border-surface-700">
+                <div className="flex justify-between items-center">
+                  <span className="text-surface-400">Cost per {formData.unit_type === 'weight' ? 'gram' : 'piece'}:</span>
+                  <span className="font-mono font-bold text-primary-500 text-lg">
+                    ₱{perUnitCost.toFixed(4)}
                   </span>
                 </div>
+                {formData.unit_type === 'weight' && parseFloat(formData.qty) > 0 && (
+                  <p className="text-surface-500 text-xs mt-2">
+                    {parseFloat(formData.qty).toLocaleString()}g = ₱{parseFloat(formData.totalCost || '0').toLocaleString()} → ₱{perUnitCost.toFixed(4)}/g
+                  </p>
+                )}
               </div>
 
               {/* Submit */}

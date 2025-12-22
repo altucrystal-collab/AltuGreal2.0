@@ -61,27 +61,27 @@ export default function EarningsPage() {
 
       if (error) throw error
 
-      // Add store_sale_datetime fallback and filter by it
-      const salesWithStoreDateTime = (data || []).map((sale: any) => ({
+      // Normalize field names for backward compatibility
+      const normalizedSales = (data || []).map((sale: any) => ({
         ...sale,
-        store_sale_datetime: sale.store_sale_datetime || sale.created_at
+        earnings_datetime: sale.earnings_datetime || sale.store_sale_datetime || sale.created_at
       }))
 
-      let filteredSales = salesWithStoreDateTime
+      let filteredSales = normalizedSales
 
       if (viewMode === 'today') {
         const today = new Date()
         const dateStart = startOfDay(today)
         const dateEnd = endOfDay(today)
-        filteredSales = salesWithStoreDateTime.filter((s: Sale) => {
-          const saleDate = new Date(s.store_sale_datetime || s.created_at)
+        filteredSales = normalizedSales.filter((s: any) => {
+          const saleDate = new Date(s.earnings_datetime)
           return saleDate >= dateStart && saleDate <= dateEnd
         })
       } else {
         const dateStart = startOfDay(new Date(startDate))
         const dateEnd = endOfDay(new Date(endDate))
-        filteredSales = salesWithStoreDateTime.filter((s: Sale) => {
-          const saleDate = new Date(s.store_sale_datetime || s.created_at)
+        filteredSales = normalizedSales.filter((s: any) => {
+          const saleDate = new Date(s.earnings_datetime)
           return saleDate >= dateStart && saleDate <= dateEnd
         })
       }
@@ -133,7 +133,7 @@ export default function EarningsPage() {
     return acc
   }, {} as Record<string, number>)
 
-  // Line chart data for date range - uses store_sale_datetime for earnings tracking
+  // Line chart data for date range - uses earnings_datetime for earnings tracking
   const getLineChartData = () => {
     if (viewMode !== 'range') return null
 
@@ -145,13 +145,13 @@ export default function EarningsPage() {
     const revenueByDay = days.map((day) => {
       const dayStr = format(day, 'yyyy-MM-dd')
       return sales
-        .filter((s) => format(new Date(s.store_sale_datetime || s.created_at), 'yyyy-MM-dd') === dayStr)
+        .filter((s: any) => format(new Date(s.earnings_datetime || s.created_at), 'yyyy-MM-dd') === dayStr)
         .reduce((sum, s) => sum + s.total, 0)
     })
 
     const profitByDay = days.map((day) => {
       const dayStr = format(day, 'yyyy-MM-dd')
-      const daySales = sales.filter((s) => format(new Date(s.store_sale_datetime || s.created_at), 'yyyy-MM-dd') === dayStr)
+      const daySales = sales.filter((s: any) => format(new Date(s.earnings_datetime || s.created_at), 'yyyy-MM-dd') === dayStr)
       const revenue = daySales.reduce((sum, s) => sum + s.total, 0)
       const cost = daySales.reduce((sum, s) => sum + (s.cost * s.qty), 0)
       return revenue - cost
@@ -294,7 +294,7 @@ export default function EarningsPage() {
       {viewMode === 'today' && (
         <div className="mb-6 p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
           <p className="text-green-400 text-sm">
-            📊 Showing today&apos;s live data based on <strong>Store Sale DateTime</strong>. Auto-refreshes every 30 seconds.
+            📊 Showing today&apos;s live data based on <strong>Earnings Date & Time</strong>. Auto-refreshes every 30 seconds.
           </p>
         </div>
       )}
@@ -303,7 +303,7 @@ export default function EarningsPage() {
       {viewMode === 'range' && (
         <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
           <p className="text-blue-400 text-sm">
-            💡 Earnings are calculated based on <strong>Store Sale DateTime</strong> which can be edited in Reports.
+            💡 Earnings are calculated based on <strong>Earnings Date & Time</strong> which can be edited in Reports.
           </p>
         </div>
       )}

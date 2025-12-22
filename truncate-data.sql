@@ -51,10 +51,8 @@ INSERT INTO customer_types (name, color) VALUES
   ('Senior', '#ec4899')
 ON CONFLICT (name) DO NOTHING;
 
--- Insert default settings
-INSERT INTO settings (key, value) VALUES
-  ('dine_in_takeout_enabled', 'false')
-ON CONFLICT (key) DO NOTHING;
+-- Note: dine_in_takeout_enabled setting is no longer needed
+-- Dine In/Takeout is now a required selection in Sales
 
 -- ============================================
 -- VERIFICATION

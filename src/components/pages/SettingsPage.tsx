@@ -28,7 +28,6 @@ const COLOR_OPTIONS = [
 export default function SettingsPage() {
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
   const [customerTypes, setCustomerTypes] = useState<CustomerType[]>([])
-  const [dineInEnabled, setDineInEnabled] = useState(false)
   const [loading, setLoading] = useState(true)
 
   // Form states
@@ -39,17 +38,13 @@ export default function SettingsPage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [paymentRes, customerRes, settingsRes] = await Promise.all([
+      const [paymentRes, customerRes] = await Promise.all([
         supabase.from('payment_methods').select('*').order('name'),
         supabase.from('customer_types').select('*').order('name'),
-        supabase.from('settings').select('*').eq('key', 'dine_in_takeout_enabled'),
       ])
 
       if (paymentRes.data) setPaymentMethods(paymentRes.data)
       if (customerRes.data) setCustomerTypes(customerRes.data)
-      if (settingsRes.data && settingsRes.data[0]) {
-        setDineInEnabled(settingsRes.data[0].value === 'true')
-      }
     } catch (error) {
       console.error('Error fetching settings:', error)
       toast.error('Failed to load settings')
@@ -61,35 +56,6 @@ export default function SettingsPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
-
-  const toggleDineIn = async () => {
-    const newValue = !dineInEnabled
-    try {
-      const { data: existing } = await supabase
-        .from('settings')
-        .select('*')
-        .eq('key', 'dine_in_takeout_enabled')
-        .single()
-
-      if (existing) {
-        await (supabase as any)
-          .from('settings')
-          .update({ value: String(newValue) })
-          .eq('key', 'dine_in_takeout_enabled')
-      } else {
-        await (supabase as any).from('settings').insert({
-          key: 'dine_in_takeout_enabled',
-          value: String(newValue),
-        })
-      }
-
-      setDineInEnabled(newValue)
-      toast.success(`Dine In/Takeout ${newValue ? 'enabled' : 'disabled'}`)
-    } catch (error) {
-      console.error('Error updating setting:', error)
-      toast.error('Failed to update setting')
-    }
-  }
 
   const addPaymentMethod = async () => {
     if (!newPaymentMethod.name.trim()) {
@@ -182,30 +148,6 @@ export default function SettingsPage() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-white">Settings</h1>
         <p className="text-surface-400 text-sm mt-1">Configure your POS system</p>
-      </div>
-
-      {/* Dine In / Takeout Toggle */}
-      <div className="card p-6 mb-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-semibold text-white">Dine In / Takeout Option</h3>
-            <p className="text-surface-400 text-sm mt-1">
-              Enable this to show Dine In or Takeout selection in Sales
-            </p>
-          </div>
-          <button
-            onClick={toggleDineIn}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-              dineInEnabled ? 'bg-primary-500' : 'bg-surface-700'
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                dineInEnabled ? 'translate-x-6' : 'translate-x-1'
-              }`}
-            />
-          </button>
-        </div>
       </div>
 
       {/* Payment Methods */}
