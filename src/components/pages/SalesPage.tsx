@@ -237,7 +237,7 @@ export default function SalesPage() {
         }
       }
 
-      // Create sale records
+      // Create sale records - base fields that always exist
       const saleRecords = cart.map(item => ({
         transaction_id: transactionId,
         product_id: item.product.id,
@@ -250,7 +250,6 @@ export default function SalesPage() {
         payment_method: selectedPaymentMethod,
         customer_type: selectedCustomerType,
         dine_in_takeout: selectedDineInTakeout,
-        customer_payment: paymentAmount,
       }))
       
       const { data: saleData, error: saleError } = await (supabase as any)
@@ -258,20 +257,28 @@ export default function SalesPage() {
         .insert(saleRecords)
         .select()
 
-      if (saleError) throw saleError
+      if (saleError) {
+        console.error('Sale insert error:', saleError)
+        throw saleError
+      }
 
       // Deduct ingredients from inventory
-      const inventoryUpdates = Object.entries(ingredientDeductions).map(([itemId, deduction]) => {
+      for (const [itemId, deduction] of Object.entries(ingredientDeductions)) {
         const item = inventoryItems.find(i => i.id === itemId)
-        if (!item) return null
+        if (!item) continue
+        
         const deductionInStorageUnit = item.unit_type === 'weight' ? deduction / 1000 : deduction
-        return (supabase as any)
+        const newQty = Math.max(0, item.qty - deductionInStorageUnit)
+        
+        const { error: updateError } = await (supabase as any)
           .from('products')
-          .update({ qty: Math.max(0, item.qty - deductionInStorageUnit) })
+          .update({ qty: newQty })
           .eq('id', itemId)
-      }).filter(Boolean)
-
-      await Promise.all(inventoryUpdates)
+        
+        if (updateError) {
+          console.error(`Failed to update inventory for ${item.name}:`, updateError)
+        }
+      }
 
       if (saleData && saleData.length > 0) {
         addRecentSale(saleData[0])
@@ -534,10 +541,10 @@ export default function SalesPage() {
             {/* Quantity Controls */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-surface-300 mb-2">Quantity</label>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center gap-4">
                 <button
                   onClick={() => handleQuantityChange(Math.max(1, (parseInt(modalQuantity) || 0) - 1).toString())}
-                  className="w-12 h-12 rounded-lg bg-surface-800 hover:bg-surface-700 text-white flex items-center justify-center text-xl font-bold"
+                  className="w-14 h-14 flex-shrink-0 rounded-lg bg-surface-700 hover:bg-surface-600 text-white flex items-center justify-center text-2xl font-bold border border-surface-600 transition-colors"
                 >
                   −
                 </button>
@@ -546,11 +553,11 @@ export default function SalesPage() {
                   inputMode="numeric"
                   value={modalQuantity}
                   onChange={(e) => handleQuantityChange(e.target.value)}
-                  className="flex-1 px-4 py-3 bg-surface-800 border border-surface-700 rounded-lg text-white text-center font-mono text-xl"
+                  className="w-24 px-4 py-3 bg-surface-800 border border-surface-700 rounded-lg text-white text-center font-mono text-xl"
                 />
                 <button
                   onClick={() => handleQuantityChange(((parseInt(modalQuantity) || 0) + 1).toString())}
-                  className="w-12 h-12 rounded-lg bg-surface-800 hover:bg-surface-700 text-white flex items-center justify-center text-xl font-bold"
+                  className="w-14 h-14 flex-shrink-0 rounded-lg bg-surface-700 hover:bg-surface-600 text-white flex items-center justify-center text-2xl font-bold border border-surface-600 transition-colors"
                 >
                   +
                 </button>
