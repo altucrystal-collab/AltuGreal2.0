@@ -1,4 +1,4 @@
--- KASHPOS v2.0 - Truncate All Data
+-- Altu Greal v2.0 - Truncate All Data
 -- Run this SQL in your Supabase SQL Editor to clear all stored data
 -- 
 -- ⚠️ WARNING: This will DELETE ALL DATA from the following tables:
@@ -50,7 +50,7 @@ TRUNCATE TABLE opex_settings CASCADE;
 -- ON CONFLICT (name) DO NOTHING;
 
 -- INSERT INTO customer_types (name, color) VALUES
---   ('Regular', '#6366f1'),
+--   ('Regular', '#B3855D'),
 --   ('Student', '#f59e0b'),
 --   ('Senior', '#ec4899')
 -- ON CONFLICT (name) DO NOTHING;

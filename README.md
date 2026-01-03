@@ -1,8 +1,8 @@
-# PerexPastil - Point of Sale System
+# Altu Greal - Point of Sale System
 
 A modern, responsive Point of Sale system built with Next.js 14, TypeScript, Tailwind CSS, and Supabase.
 
-![PerexPastil](https://img.shields.io/badge/PerexPastil-v1.0.0-green)
+![Altu Greal](https://img.shields.io/badge/Altu%20Greal-v2.0.0-B3855D)
 
 ## Features
 
@@ -11,35 +11,46 @@ A modern, responsive Point of Sale system built with Next.js 14, TypeScript, Tai
   - Cashier: Sales only
 
 - **🛒 Sales**
+  - Multi-product cart system
   - Product selection with image preview
+  - Out-of-stock detection (products with insufficient ingredients are disabled)
   - Customer type selection
   - Payment method selection
-  - Quantity selection (weight or pieces)
-  - Dine In/Takeout option (configurable)
-  - Real-time checkout
+  - Dine In/Takeout option
+  - Customer payment and change calculation
+  - Real-time checkout with transaction numbers (YY-MM-XXXXX format)
 
 - **📊 Reports**
-  - Daily sales reports
-  - Date picker for historical data
-  - Editable fields (payment method, customer type, dine in/takeout)
+  - Daily sales reports with transaction grouping
+  - Date range selection
+  - Editable Report Date for earnings tracking
   - Multi-select archive with CSV export
 
 - **📦 Inventory**
-  - Product management (CRUD)
-  - Image upload with automatic compression (100x100px, max 150KB)
-  - Stock tracking by weight or quantity
-  - Cost and selling price management
+  - Inventory item management with image upload
+  - Product creation from ingredients
+  - Stock tracking by weight (kg), quantity (pcs), or volume (L/ml)
+  - Automatic ingredient deduction on sales
+  - Cost per unit calculation
 
 - **💰 Earnings**
-  - Daily profit calculations (viewable after day ends)
-  - Revenue, cost, and profit summary
+  - Daily profit calculations
+  - Revenue, item expenses, and profit summary
+  - OPEX (Operating Expenses) tracking
+  - Remaining OPEX calculation with break-even detection
+  - Net profit shows only after monthly OPEX is covered
   - Pie charts: Customer types, Payment methods, Dine In/Takeout
   - Line graphs for date range analysis
 
+- **📋 OPEX**
+  - Monthly operating expenses management
+  - Add/edit/delete expense items
+  - Total monthly OPEX calculation
+
 - **⚙️ Settings**
-  - Toggle Dine In/Takeout option
   - Custom payment methods with colors
   - Custom customer types with colors
+  - Logout functionality
 
 - **🔔 Notifications**
   - Storage warning (Supabase free tier)
@@ -60,7 +71,8 @@ A modern, responsive Point of Sale system built with Next.js 14, TypeScript, Tai
 ### 1. Clone and Install
 
 ```bash
-cd PerexPastil
+git clone https://github.com/altucrystal-collab/AltuGreal2.0.git
+cd AltuGreal2.0
 npm install
 ```
 
@@ -69,21 +81,22 @@ npm install
 Create a `.env.local` file in the project root:
 
 ```env
-NEXT_PUBLIC_SUPABASE_URL=https://uwhinxqsgwwvwnvdxqvp.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV3aGlueHFzZ3d3dndudmR4cXZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU5NjA2MjEsImV4cCI6MjA4MTUzNjYyMX0.DOgoRHsEzKoAgS5V26k-EbS_f9Dl0wgTL-ezU2m0Md8
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
 ### 3. Setup Supabase Database
 
-1. Go to your [Supabase Dashboard](https://supabase.com/dashboard/project/uwhinxqsgwwvwnvdxqvp)
+1. Create a new [Supabase Project](https://supabase.com/dashboard)
 2. Navigate to **SQL Editor**
-3. Copy the contents of `supabase-schema.sql` and run it
+3. Copy the contents of `altu-greal-schema.sql` and run it
 4. Create a storage bucket:
    - Go to **Storage** in the sidebar
    - Click **New bucket**
    - Name: `product-images`
    - Check **Public bucket**
    - Click **Create bucket**
+   - Add policies for public read, upload, and delete
 
 ### 4. Run Development Server
 
@@ -95,10 +108,10 @@ Open [http://localhost:3000](http://localhost:3000)
 
 ## Login Credentials
 
-| Role    | Username         | Password         |
-|---------|------------------|------------------|
-| Owner   | adminPerexPastil | adminPerexPastil |
-| Cashier | admin            | admin            |
+| Role    | Username | Password   |
+|---------|----------|------------|
+| Owner   | owner    | owner123   |
+| Cashier | cashier  | cashier123 |
 
 ## Deploying to Vercel
 
@@ -132,7 +145,7 @@ vercel --prod
 ## Project Structure
 
 ```
-PerexPastil/
+AltuGreal2.0/
 ├── src/
 │   ├── app/
 │   │   ├── globals.css
@@ -147,6 +160,7 @@ PerexPastil/
 │   │   └── pages/
 │   │       ├── EarningsPage.tsx
 │   │       ├── InventoryPage.tsx
+│   │       ├── OPEXPage.tsx
 │   │       ├── ReportsPage.tsx
 │   │       ├── SalesPage.tsx
 │   │       └── SettingsPage.tsx
@@ -157,11 +171,16 @@ PerexPastil/
 │   │   └── supabase.ts
 │   └── types/
 │       └── database.ts
-├── supabase-schema.sql
+├── altu-greal-schema.sql    # Complete database schema
+├── truncate-data.sql        # Script to clear all data
 ├── package.json
 ├── tailwind.config.js
 └── README.md
 ```
+
+## Database Schema
+
+For new instances, run the single schema file `altu-greal-schema.sql` in your Supabase SQL Editor. This contains all tables, functions, triggers, RLS policies, and default data.
 
 ## Supabase Free Tier Limits
 
@@ -178,4 +197,4 @@ MIT License
 
 ---
 
-Built with ❤️ using Next.js and Supabase
+Built with ❤️ by Altu Crystal

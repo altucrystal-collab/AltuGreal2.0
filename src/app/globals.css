@@ -8,8 +8,8 @@
   --card: #141416;
   --card-hover: #1a1a1d;
   --border: #27272a;
-  --accent: #10b981;
-  --accent-hover: #059669;
+  --accent: #B3855D;
+  --accent-hover: #9a6d4a;
   --success: #22c55e;
   --error: #ef4444;
   --warning: #f59e0b;
@@ -54,7 +54,7 @@ select:focus,
 textarea:focus {
   outline: none;
   border-color: var(--accent) !important;
-  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+  box-shadow: 0 0 0 2px rgba(179, 133, 93, 0.2);
 }
 
 /* Button transitions */
@@ -105,10 +105,10 @@ button {
 /* Pulse animation for new purchase */
 @keyframes pulse-glow {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+    box-shadow: 0 0 0 0 rgba(179, 133, 93, 0.4);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
+    box-shadow: 0 0 0 8px rgba(179, 133, 93, 0);
   }
 }
 
@@ -133,6 +133,3 @@ input[type="number"] {
     transform: scale(0.98);
   }
 }
-
-
-

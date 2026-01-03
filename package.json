@@ -1,6 +1,6 @@
 {
-  "name": "kashpos",
-  "version": "1.0.0",
+  "name": "altu-greal-pos",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -31,6 +31,3 @@
     "typescript": "^5.3.3"
   }
 }
-
-
-

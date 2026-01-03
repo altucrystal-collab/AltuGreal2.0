@@ -14,8 +14,8 @@ const jetbrains = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'PerexPastil - Point of Sale',
-  description: 'Modern point of sale system',
+  title: 'Altu Greal - Point of Sale',
+  description: 'Modern point of sale system by Altu Crystal',
 }
 
 export default function RootLayout({
@@ -31,6 +31,3 @@ export default function RootLayout({
     </html>
   )
 }
-
-
-

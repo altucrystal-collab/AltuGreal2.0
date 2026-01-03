@@ -21,7 +21,7 @@ export default function LoginPage() {
 
     const success = login(username, password);
     if (success) {
-      toast.success("Welcome to KASHPOS!");
+      toast.success("Welcome to Altu Greal!");
     } else {
       toast.error("Invalid username or password");
     }
@@ -70,11 +70,11 @@ export default function LoginPage() {
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth={2}
-                d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"
+                d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
               />
             </svg>
           </div>
-          <h1 className="text-3xl font-bold text-white mb-1">KASHPOS</h1>
+          <h1 className="text-3xl font-bold text-white mb-1">Altu Greal</h1>
           <p className="text-primary-400 text-sm font-medium mb-2">v2.0</p>
           <p className="text-surface-400">Sign in to your account</p>
         </div>
