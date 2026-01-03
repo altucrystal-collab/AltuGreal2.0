@@ -108,10 +108,7 @@ Open [http://localhost:3000](http://localhost:3000)
 
 ## Login Credentials
 
-| Role    | Username    | Password       |
-|---------|-------------|----------------|
-| Owner   | Altuadmin   | Altuadmin2025  |
-| Cashier | Altucashier | Altucashier    |
+Contact the system administrator for login credentials.
 
 ## Deploying to Vercel
 
