@@ -442,7 +442,7 @@ export default function EarningsPage() {
       )}
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="card p-6">
           <div className="flex items-center gap-3 mb-2">
             <div className="w-10 h-10 rounded-lg bg-primary-500/10 flex items-center justify-center">
@@ -467,25 +467,6 @@ export default function EarningsPage() {
             <div>
               <p className="text-surface-400 text-sm">Item Expenses</p>
               <p className="text-2xl font-bold text-white font-mono">₱{totalItemExpenses.toFixed(2)}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="card p-6">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 rounded-lg bg-yellow-500/10 flex items-center justify-center">
-              <svg className="w-5 h-5 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-surface-400 text-sm">Remaining OPEX</p>
-              <p className={`text-2xl font-bold font-mono ${isBreakEvenReached ? 'text-green-400' : 'text-yellow-400'}`}>
-                ₱{remainingOpex.toFixed(2)}
-              </p>
-              {isBreakEvenReached && (
-                <p className="text-xs text-green-400">OPEX covered ✓</p>
-              )}
             </div>
           </div>
         </div>

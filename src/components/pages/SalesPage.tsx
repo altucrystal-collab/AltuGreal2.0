@@ -65,6 +65,12 @@ export default function SalesPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deletingProduct, setDeletingProduct] = useState<FinishedProduct | null>(null)
 
+  // Edit ingredients modal
+  const [showEditIngredients, setShowEditIngredients] = useState(false)
+  const [editingProductIngredients, setEditingProductIngredients] = useState<FinishedProduct | null>(null)
+  const [editIngredientsList, setEditIngredientsList] = useState<{item_id: string, qty: number}[]>([])
+  const [isSavingIngredients, setIsSavingIngredients] = useState(false)
+
   const isOwner = user?.role === 'owner'
 
   const fetchData = useCallback(async () => {
@@ -308,6 +314,85 @@ export default function SalesPage() {
   const openDeleteConfirm = (product: FinishedProduct) => {
     setDeletingProduct(product)
     setShowDeleteConfirm(true)
+  }
+
+  // Open edit ingredients modal
+  const openEditIngredients = (product: FinishedProduct) => {
+    const ingredients = productIngredients[product.id] || []
+    setEditIngredientsList(ingredients.map(ing => ({ item_id: ing.item_id, qty: ing.qty })))
+    setEditingProductIngredients(product)
+    setShowEditIngredients(true)
+    closeModal()
+  }
+
+  // Add ingredient to edit list
+  const addIngredientToEdit = (itemId: string) => {
+    if (editIngredientsList.find(i => i.item_id === itemId)) {
+      toast.error('Ingredient already added')
+      return
+    }
+    setEditIngredientsList([...editIngredientsList, { item_id: itemId, qty: 1 }])
+  }
+
+  // Remove ingredient from edit list
+  const removeIngredientFromEdit = (itemId: string) => {
+    setEditIngredientsList(editIngredientsList.filter(i => i.item_id !== itemId))
+  }
+
+  // Update ingredient quantity in edit list
+  const updateIngredientQty = (itemId: string, qty: number) => {
+    setEditIngredientsList(editIngredientsList.map(i => 
+      i.item_id === itemId ? { ...i, qty: Math.max(0, qty) } : i
+    ))
+  }
+
+  // Save edited ingredients
+  const saveEditedIngredients = async () => {
+    if (!editingProductIngredients) return
+    if (editIngredientsList.length === 0) {
+      toast.error('Add at least one ingredient')
+      return
+    }
+
+    setIsSavingIngredients(true)
+    try {
+      // Delete old ingredients
+      await (supabase as any)
+        .from('product_ingredients')
+        .delete()
+        .eq('product_id', editingProductIngredients.id)
+
+      // Insert new ingredients
+      const ingredientsToInsert = editIngredientsList.map(ing => ({
+        product_id: editingProductIngredients.id,
+        item_id: ing.item_id,
+        qty: ing.qty,
+      }))
+
+      const { error } = await (supabase as any)
+        .from('product_ingredients')
+        .insert(ingredientsToInsert)
+
+      if (error) throw error
+
+      toast.success('Ingredients updated!')
+      setShowEditIngredients(false)
+      setEditingProductIngredients(null)
+      setEditIngredientsList([])
+      fetchData()
+    } catch (error) {
+      console.error('Error saving ingredients:', error)
+      toast.error('Failed to save ingredients')
+    } finally {
+      setIsSavingIngredients(false)
+    }
+  }
+
+  // Close edit ingredients modal
+  const closeEditIngredients = () => {
+    setShowEditIngredients(false)
+    setEditingProductIngredients(null)
+    setEditIngredientsList([])
   }
 
   // Handle checkout
@@ -704,17 +789,28 @@ export default function SalesPage() {
                   </button>
                 </div>
 
-            {/* Delete Product Button (Owner only) */}
+            {/* Owner Actions */}
             {isOwner && !editingCartItem && (
-              <button
-                onClick={() => openDeleteConfirm(currentProduct)}
-                className="w-full mt-3 py-2 text-red-400 hover:text-red-300 text-sm flex items-center justify-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-                Delete Product
-              </button>
+              <div className="mt-3 pt-3 border-t border-surface-800 space-y-2">
+                <button
+                  onClick={() => openEditIngredients(currentProduct)}
+                  className="w-full py-2 text-primary-400 hover:text-primary-300 text-sm flex items-center justify-center gap-2 hover:bg-surface-800/50 rounded-lg transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                  Edit Ingredients
+                </button>
+                <button
+                  onClick={() => openDeleteConfirm(currentProduct)}
+                  className="w-full py-2 text-red-400 hover:text-red-300 text-sm flex items-center justify-center gap-2 hover:bg-red-500/10 rounded-lg transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Delete Product
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -749,6 +845,112 @@ export default function SalesPage() {
                 className="flex-1 px-4 py-2 bg-red-500 hover:bg-red-600 text-white font-medium rounded-lg transition-colors"
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Ingredients Modal */}
+      {showEditIngredients && editingProductIngredients && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="card p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-white">
+                Edit Ingredients: {editingProductIngredients.name}
+              </h3>
+              <button onClick={closeEditIngredients} className="text-surface-400 hover:text-white p-1">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Current Ingredients */}
+            <div className="mb-4">
+              <h4 className="text-sm font-medium text-surface-400 mb-2">Current Ingredients</h4>
+              {editIngredientsList.length === 0 ? (
+                <p className="text-surface-500 text-sm p-3 bg-surface-800/50 rounded-lg">No ingredients added</p>
+              ) : (
+                <div className="space-y-2">
+                  {editIngredientsList.map((ing) => {
+                    const item = inventoryItems.find(i => i.id === ing.item_id)
+                    if (!item) return null
+                    const unitLabel = item.unit_type === 'weight' ? 'g' : item.unit_type === 'volume' ? 'ml' : 'pcs'
+                    return (
+                      <div key={ing.item_id} className="flex items-center gap-3 p-3 bg-surface-800/50 rounded-lg">
+                        <span className="flex-1 text-white text-sm">{item.name}</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => updateIngredientQty(ing.item_id, ing.qty - 1)}
+                            className="w-8 h-8 flex items-center justify-center bg-surface-700 hover:bg-surface-600 rounded text-white"
+                          >
+                            −
+                          </button>
+                          <input
+                            type="number"
+                            value={ing.qty}
+                            onChange={(e) => updateIngredientQty(ing.item_id, parseFloat(e.target.value) || 0)}
+                            className="w-16 px-2 py-1 bg-surface-800 border border-surface-700 rounded text-white text-center font-mono text-sm"
+                          />
+                          <span className="text-surface-400 text-xs w-8">{unitLabel}</span>
+                          <button
+                            onClick={() => updateIngredientQty(ing.item_id, ing.qty + 1)}
+                            className="w-8 h-8 flex items-center justify-center bg-surface-700 hover:bg-surface-600 rounded text-white"
+                          >
+                            +
+                          </button>
+                        </div>
+                        <button
+                          onClick={() => removeIngredientFromEdit(ing.item_id)}
+                          className="p-1 text-red-400 hover:text-red-300"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Add Ingredient */}
+            <div className="mb-4">
+              <h4 className="text-sm font-medium text-surface-400 mb-2">Add Ingredient</h4>
+              <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto p-2 bg-surface-800/30 rounded-lg">
+                {inventoryItems
+                  .filter(item => !editIngredientsList.find(i => i.item_id === item.id))
+                  .map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => addIngredientToEdit(item.id)}
+                      className="p-2 text-xs bg-surface-800 hover:bg-surface-700 text-white rounded-lg transition-colors truncate"
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+              </div>
+              {inventoryItems.filter(item => !editIngredientsList.find(i => i.item_id === item.id)).length === 0 && (
+                <p className="text-surface-500 text-sm text-center py-2">All items already added</p>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={closeEditIngredients}
+                className="flex-1 px-4 py-2 text-surface-400 hover:text-white hover:bg-surface-800 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEditedIngredients}
+                disabled={isSavingIngredients || editIngredientsList.length === 0}
+                className="flex-1 px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
+              >
+                {isSavingIngredients ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </div>
