@@ -13,8 +13,8 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 const USERS: { username: string; password: string; role: UserRole }[] = [
-  { username: 'owner', password: 'owner123', role: 'owner' },
-  { username: 'cashier', password: 'cashier123', role: 'cashier' },
+  { username: 'Altuadmin', password: 'Altuadmin2025', role: 'owner' },
+  { username: 'Altucashier', password: 'Altucashier', role: 'cashier' },
 ]
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -23,12 +23,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // Check for stored session
-    const storedUser = localStorage.getItem('kashpos_user')
+    const storedUser = localStorage.getItem('altugreal_user')
     if (storedUser) {
       try {
         setUser(JSON.parse(storedUser))
       } catch {
-        localStorage.removeItem('kashpos_user')
+        localStorage.removeItem('altugreal_user')
       }
     }
     setIsLoading(false)
@@ -42,7 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (foundUser) {
       const userObj: User = { username: foundUser.username, role: foundUser.role }
       setUser(userObj)
-      localStorage.setItem('kashpos_user', JSON.stringify(userObj))
+      localStorage.setItem('altugreal_user', JSON.stringify(userObj))
       return true
     }
     return false
@@ -50,7 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     setUser(null)
-    localStorage.removeItem('kashpos_user')
+    localStorage.removeItem('altugreal_user')
   }
 
   return (
