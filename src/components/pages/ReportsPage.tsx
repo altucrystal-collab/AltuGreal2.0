@@ -16,6 +16,7 @@ interface Transaction {
   transaction_number: string
   items: SaleWithEarnings[]
   total: number
+  cost: number
   payment_method: string
   customer_type: string
   dine_in_takeout: 'dine_in' | 'takeout'
@@ -24,12 +25,19 @@ interface Transaction {
   customer_payment: number | null
 }
 
+interface OpexItem {
+  monthly_cost: number
+}
+
 export default function ReportsPage() {
   const [sales, setSales] = useState<SaleWithEarnings[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([])
   const [customerTypes, setCustomerTypes] = useState<CustomerType[]>([])
   const [loading, setLoading] = useState(true)
+  
+  // OPEX data
+  const [totalMonthlyOpex, setTotalMonthlyOpex] = useState(0)
   
   // Date range
   const [startDate, setStartDate] = useState<string>(format(subDays(new Date(), 7), 'yyyy-MM-dd'))
@@ -41,6 +49,17 @@ export default function ReportsPage() {
   
   // Editing
   const [editingField, setEditingField] = useState<string | null>(null)
+
+  // Fetch OPEX data
+  const fetchOpexData = useCallback(async () => {
+    try {
+      const { data } = await supabase.from('opex').select('monthly_cost')
+      const total = (data || []).reduce((sum: number, item: OpexItem) => sum + item.monthly_cost, 0)
+      setTotalMonthlyOpex(total)
+    } catch (error) {
+      console.error('Error fetching OPEX:', error)
+    }
+  }, [])
 
   const fetchSales = useCallback(async () => {
     setLoading(true)
@@ -77,6 +96,7 @@ export default function ReportsPage() {
             transaction_number: sale.transaction_number || txId.substring(0, 8),
             items: [],
             total: 0,
+            cost: 0,
             payment_method: sale.payment_method,
             customer_type: sale.customer_type,
             dine_in_takeout: sale.dine_in_takeout,
@@ -87,6 +107,7 @@ export default function ReportsPage() {
         }
         acc[txId].items.push(sale)
         acc[txId].total += sale.total
+        acc[txId].cost += (sale.cost * sale.qty)
         return acc
       }, {} as Record<string, Transaction>)
 
@@ -116,7 +137,8 @@ export default function ReportsPage() {
   useEffect(() => {
     fetchSales()
     fetchOptions()
-  }, [fetchSales, fetchOptions])
+    fetchOpexData()
+  }, [fetchSales, fetchOptions, fetchOpexData])
 
   const toggleSelectTransaction = (txId: string) => {
     setSelectedTransactions((prev) => {
@@ -157,11 +179,34 @@ export default function ReportsPage() {
         'Order',
         'Timestamp',
         'Report Date',
-        'Total'
+        'Total',
+        'Remaining OPEX',
+        'Net Profit'
       ]
+      
+      // Calculate running totals for OPEX and profit (same logic as table)
+      const sortedForCalc = [...selectedTxs].sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      )
+      
+      let runningGrossMargin = 0
+      const txCalculations = new Map<string, { remainingOpex: number, netProfit: number }>()
+      
+      for (const tx of sortedForCalc) {
+        const grossMargin = tx.total - tx.cost
+        runningGrossMargin += grossMargin
+        
+        const remainingOpex = Math.max(0, totalMonthlyOpex - runningGrossMargin)
+        const netProfit = runningGrossMargin > totalMonthlyOpex 
+          ? runningGrossMargin - totalMonthlyOpex 
+          : 0
+        
+        txCalculations.set(tx.id, { remainingOpex, netProfit })
+      }
       
       const csvRows = selectedTxs.map((tx) => {
         const itemsList = tx.items.map(i => `${i.product_name} (${i.qty}pcs)`).join('; ')
+        const calc = txCalculations.get(tx.id) || { remainingOpex: totalMonthlyOpex, netProfit: 0 }
         
         return [
           tx.transaction_number,
@@ -172,6 +217,8 @@ export default function ReportsPage() {
           format(new Date(tx.created_at), 'MMM d yyyy h:mm a'),
           format(new Date(tx.earnings_datetime), 'MMM d yyyy h:mm a'),
           tx.total.toFixed(2),
+          calc.remainingOpex.toFixed(2),
+          calc.netProfit.toFixed(2),
         ]
       })
 
@@ -366,10 +413,36 @@ export default function ReportsPage() {
                       <span className="text-primary-400">Report Date</span>
                     </th>
                     <th className="p-4 text-right text-sm font-medium text-surface-400">Total</th>
+                    <th className="p-4 text-right text-sm font-medium text-yellow-400">Remaining OPEX</th>
+                    <th className="p-4 text-right text-sm font-medium text-green-400">Net Profit</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {transactions.map((tx) => (
+                  {(() => {
+                    // Calculate running totals for OPEX and profit
+                    // Sort transactions by date ascending for correct running calculation
+                    const sortedForCalc = [...transactions].sort((a, b) => 
+                      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+                    )
+                    
+                    let runningGrossMargin = 0
+                    const txCalculations = new Map<string, { remainingOpex: number, netProfit: number }>()
+                    
+                    for (const tx of sortedForCalc) {
+                      const grossMargin = tx.total - tx.cost
+                      runningGrossMargin += grossMargin
+                      
+                      const remainingOpex = Math.max(0, totalMonthlyOpex - runningGrossMargin)
+                      const netProfit = runningGrossMargin > totalMonthlyOpex 
+                        ? runningGrossMargin - totalMonthlyOpex 
+                        : 0
+                      
+                      txCalculations.set(tx.id, { remainingOpex, netProfit })
+                    }
+                    
+                    return transactions.map((tx) => {
+                      const calc = txCalculations.get(tx.id) || { remainingOpex: totalMonthlyOpex, netProfit: 0 }
+                      return (
                     <tr key={tx.id} className="border-b border-surface-800/50 hover:bg-surface-800/30">
                       <td className="p-4">
                         <input
@@ -483,8 +556,20 @@ export default function ReportsPage() {
                       <td className="p-4 text-right text-primary-500 font-bold font-mono">
                         ₱{tx.total.toFixed(2)}
                       </td>
+                      <td className="p-4 text-right font-mono text-sm">
+                        <span className={calc.remainingOpex > 0 ? 'text-yellow-400' : 'text-green-400'}>
+                          ₱{calc.remainingOpex.toFixed(2)}
+                        </span>
+                      </td>
+                      <td className="p-4 text-right font-mono text-sm">
+                        <span className={calc.netProfit > 0 ? 'text-green-400' : 'text-surface-500'}>
+                          ₱{calc.netProfit.toFixed(2)}
+                        </span>
+                      </td>
                     </tr>
-                  ))}
+                      )
+                    })
+                  })()}
                 </tbody>
               </table>
             </div>

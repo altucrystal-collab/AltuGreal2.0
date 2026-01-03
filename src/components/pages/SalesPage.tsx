@@ -129,6 +129,42 @@ export default function SalesPage() {
     })
   }
 
+  // Calculate maximum quantity available for a product based on inventory
+  // Takes into account items already in cart
+  const getMaxAvailableQuantity = (product: FinishedProduct, excludeCurrentCart: boolean = false): number => {
+    const ingredients = productIngredients[product.id] || []
+    if (ingredients.length === 0) return 0
+    
+    // Calculate how much of each ingredient is already reserved in cart
+    const reservedIngredients: Record<string, number> = {}
+    if (!excludeCurrentCart) {
+      for (const cartItem of cart) {
+        if (cartItem.product.id === product.id) continue // Skip the product we're checking (for updates)
+        const cartIngredients = productIngredients[cartItem.product.id] || []
+        for (const ing of cartIngredients) {
+          reservedIngredients[ing.item_id] = (reservedIngredients[ing.item_id] || 0) + (ing.qty * cartItem.quantity)
+        }
+      }
+    }
+
+    let maxQty = Infinity
+    for (const ing of ingredients) {
+      const item = inventoryItems.find(i => i.id === ing.item_id)
+      if (!item) return 0
+      
+      const availableQty = getInventoryInIngredientUnit(item)
+      const reserved = reservedIngredients[ing.item_id] || 0
+      const effectiveAvailable = availableQty - reserved
+      
+      if (ing.qty > 0) {
+        const possibleQty = Math.floor(effectiveAvailable / ing.qty)
+        maxQty = Math.min(maxQty, possibleQty)
+      }
+    }
+    
+    return maxQty === Infinity ? 0 : Math.max(0, maxQty)
+  }
+
   // Calculate product cost based on ingredients only (no OPEX per unit)
   const calculateProductCost = (product: FinishedProduct): number => {
     const ingredients = productIngredients[product.id] || []
@@ -234,7 +270,28 @@ export default function SalesPage() {
       return
     }
 
+    const product = editingCartItem?.product || selectedProduct
+    if (!product) return
+
+    // Check inventory availability
+    const maxAvailable = getMaxAvailableQuantity(product, false)
+    const currentInCart = editingCartItem 
+      ? 0 // When editing, we're replacing the quantity
+      : cart.find(item => item.product.id === product.id)?.quantity || 0
+    
+    const totalRequested = editingCartItem ? qty : currentInCart + qty
+
+    if (totalRequested > maxAvailable + currentInCart) {
+      const available = maxAvailable
+      toast.error(`Only ${available} available in stock`)
+      return
+    }
+
     if (editingCartItem) {
+      if (qty > maxAvailable + editingCartItem.quantity) {
+        toast.error(`Only ${maxAvailable + editingCartItem.quantity} available in stock`)
+        return
+      }
       setCart(cart.map(item => 
         item.product.id === editingCartItem.product.id 
           ? { ...item, quantity: qty }
@@ -244,10 +301,19 @@ export default function SalesPage() {
     } else if (selectedProduct) {
       const existingIndex = cart.findIndex(item => item.product.id === selectedProduct.id)
       if (existingIndex >= 0) {
+        const newTotal = cart[existingIndex].quantity + qty
+        if (newTotal > maxAvailable + cart[existingIndex].quantity) {
+          toast.error(`Only ${maxAvailable + cart[existingIndex].quantity} available in stock`)
+          return
+        }
         const updatedCart = [...cart]
         updatedCart[existingIndex].quantity += qty
         setCart(updatedCart)
       } else {
+        if (qty > maxAvailable) {
+          toast.error(`Only ${maxAvailable} available in stock`)
+          return
+        }
         setCart([...cart, { product: selectedProduct, quantity: qty }])
       }
       toast.success('Added to cart')
@@ -737,30 +803,59 @@ export default function SalesPage() {
             </div>
 
             {/* Quantity Controls */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-surface-300 mb-2">Quantity</label>
-              <div className="flex items-center justify-center gap-4">
-                <button
-                  onClick={() => handleQuantityChange(Math.max(1, (parseInt(modalQuantity) || 0) - 1).toString())}
-                  className="w-14 h-14 flex-shrink-0 rounded-lg bg-surface-700 hover:bg-surface-600 text-white flex items-center justify-center text-2xl font-bold border border-surface-600 transition-colors"
-                >
-                  −
-                </button>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={modalQuantity}
-                  onChange={(e) => handleQuantityChange(e.target.value)}
-                  className="w-24 px-4 py-3 bg-surface-800 border border-surface-700 rounded-lg text-white text-center font-mono text-xl"
-                />
-                <button
-                  onClick={() => handleQuantityChange(((parseInt(modalQuantity) || 0) + 1).toString())}
-                  className="w-14 h-14 flex-shrink-0 rounded-lg bg-surface-700 hover:bg-surface-600 text-white flex items-center justify-center text-2xl font-bold border border-surface-600 transition-colors"
-                >
-                  +
-                </button>
-              </div>
-            </div>
+            {(() => {
+              const currentCartQty = editingCartItem ? editingCartItem.quantity : (cart.find(item => item.product.id === currentProduct.id)?.quantity || 0)
+              const maxAvailable = getMaxAvailableQuantity(currentProduct, false) + currentCartQty
+              const currentQty = parseInt(modalQuantity) || 0
+              
+              return (
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium text-surface-300">Quantity</label>
+                    <span className="text-xs text-surface-500">Max: {maxAvailable} available</span>
+                  </div>
+                  <div className="flex items-center justify-center gap-4">
+                    <button
+                      onClick={() => handleQuantityChange(Math.max(1, currentQty - 1).toString())}
+                      className="w-14 h-14 flex-shrink-0 rounded-lg bg-surface-700 hover:bg-surface-600 text-white flex items-center justify-center text-2xl font-bold border border-surface-600 transition-colors"
+                    >
+                      −
+                    </button>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={modalQuantity}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value) || 0
+                        if (val <= maxAvailable) {
+                          handleQuantityChange(e.target.value)
+                        } else {
+                          handleQuantityChange(maxAvailable.toString())
+                        }
+                      }}
+                      className="w-24 px-4 py-3 bg-surface-800 border border-surface-700 rounded-lg text-white text-center font-mono text-xl"
+                    />
+                    <button
+                      onClick={() => {
+                        const newQty = currentQty + 1
+                        if (newQty <= maxAvailable) {
+                          handleQuantityChange(newQty.toString())
+                        } else {
+                          toast.error(`Only ${maxAvailable} available in stock`)
+                        }
+                      }}
+                      disabled={currentQty >= maxAvailable}
+                      className="w-14 h-14 flex-shrink-0 rounded-lg bg-surface-700 hover:bg-surface-600 disabled:opacity-50 disabled:cursor-not-allowed text-white flex items-center justify-center text-2xl font-bold border border-surface-600 transition-colors"
+                    >
+                      +
+                    </button>
+                  </div>
+                  {currentQty >= maxAvailable && maxAvailable > 0 && (
+                    <p className="text-yellow-400 text-xs text-center mt-2">Maximum stock reached</p>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* Subtotal */}
             <div className="flex items-center justify-between mb-4 p-3 bg-surface-800/50 rounded-lg">
